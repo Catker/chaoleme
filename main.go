@@ -240,6 +240,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	cpuBenchTicker := time.NewTicker(cfg.GetCPUBenchInterval())
 	ioTestTicker := time.NewTicker(cfg.GetIOTestInterval())
 	cleanupTicker := time.NewTicker(24 * time.Hour)
+	reportCheckTicker := time.NewTicker(1 * time.Minute) // 报告检查定时器
 
 	// 解析日报时间
 	dailyTime, _ := time.Parse("15:04", cfg.Report.DailyTime)
@@ -271,6 +272,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Type:      storage.MetricTypeCPUIoWait,
 					Value:     cpuUsage.IOWaitPercent,
 				})
+				log.Printf("CPU Steal: %.2f%%, IOWait: %.2f%%", cpuUsage.StealPercent, cpuUsage.IOWaitPercent)
 			}
 
 			// Load Average 采集
@@ -290,6 +292,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Type:      storage.MetricTypeCPUBench,
 					Value:     result.DurationMs,
 				})
+				log.Printf("CPU Bench: %.2fms", result.DurationMs)
 			}
 
 		case <-ioTestTicker.C:
@@ -299,6 +302,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Type:      storage.MetricTypeIOLatency,
 					Value:     result.TotalLatencyMs,
 				})
+				log.Printf("I/O Latency: %.2fms", result.TotalLatencyMs)
 			}
 			// 同时采集内存
 			if stats, err := mem.Collect(); err == nil {
@@ -320,7 +324,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 				log.Printf("已清理 %d 条过期数据", deleted)
 			}
 
-		case <-time.After(1 * time.Minute):
+		case <-reportCheckTicker.C:
 			// 检查是否需要发送报告
 			now := time.Now()
 
@@ -354,6 +358,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 			cpuBenchTicker.Stop()
 			ioTestTicker.Stop()
 			cleanupTicker.Stop()
+			reportCheckTicker.Stop()
 			return
 		}
 	}
