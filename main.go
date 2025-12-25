@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	configPath   = flag.String("config", "/etc/chaoleme/config.yaml", "配置文件路径")
+	configPath   = flag.String("config", "/opt/chaoleme/config/config.yaml", "配置文件路径")
 	validateOnly = flag.Bool("validate", false, "仅验证配置文件")
 	testTelegram = flag.Bool("test-telegram", false, "测试 Telegram 连接")
 	collectOnce  = flag.Bool("collect-once", false, "仅采集一次数据")
