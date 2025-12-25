@@ -140,6 +140,7 @@ const (
 )
 
 // DetectStorageType 检测存储类型（SSD 或 HDD）
+// 注意：在 VPS 环境中此方法可能不可靠，建议使用 DetectStorageTypeByLatency
 func (d *DiskCollector) DetectStorageType() StorageType {
 	// 读取 /sys/block/*/queue/rotational
 	// 0 = SSD, 1 = HDD
@@ -170,6 +171,25 @@ func (d *DiskCollector) DetectStorageType() StorageType {
 	}
 
 	return StorageTypeUnknown
+}
+
+// DetectStorageTypeByLatency 根据随机读延迟推断存储类型
+// 这比读取 /sys/block/.../rotational 在 VPS 环境更可靠
+// 典型延迟参考:
+//   - NVMe SSD: 0.05 - 0.5ms
+//   - SATA SSD: 0.1 - 1ms
+//   - HDD 7200rpm: 8 - 15ms
+//   - HDD 5400rpm: 12 - 20ms
+func DetectStorageTypeByLatency(randomReadLatencyMs float64) StorageType {
+	if randomReadLatencyMs <= 0 {
+		return StorageTypeUnknown
+	}
+	if randomReadLatencyMs < 2.0 {
+		return StorageTypeSSD // < 2ms 基本是 SSD
+	} else if randomReadLatencyMs > 5.0 {
+		return StorageTypeHDD // > 5ms 大概率是 HDD
+	}
+	return StorageTypeUnknown // 2-5ms 区间不确定
 }
 
 // DiskStats 系统级磁盘统计（从 /proc/diskstats 采集）

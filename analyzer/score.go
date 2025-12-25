@@ -88,19 +88,14 @@ type PeriodStats struct {
 
 // Analyzer 分析器
 type Analyzer struct {
-	store       *storage.Storage
-	storageType collector.StorageType
+	store *storage.Storage
 }
 
 // NewAnalyzer 创建分析器
+// 存储类型将在 AnalyzePeriod 时根据实测的随机读延迟动态推断
 func NewAnalyzer(store *storage.Storage) *Analyzer {
-	// 检测存储类型
-	diskCollector := collector.NewDiskCollector(1)
-	storageType := diskCollector.DetectStorageType()
-
 	return &Analyzer{
-		store:       store,
-		storageType: storageType,
+		store: store,
 	}
 }
 
@@ -110,7 +105,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		Period:      period,
 		StartTime:   start,
 		EndTime:     end,
-		StorageType: a.storageType,
+		StorageType: collector.StorageTypeUnknown, // 初始为未知，后续根据延迟推断
 		RiskDetails: make(map[string]string),
 	}
 
@@ -197,6 +192,11 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		// P95 使用写延迟（通常更能反映问题）
 		if len(writeLatencies) > 0 {
 			stats.RandomIOP95 = percentile(writeLatencies, 95)
+		}
+
+		// 根据平均随机读延迟推断存储类型（比读取 /sys/block 更可靠）
+		if stats.RandomIOReadAvg > 0 {
+			stats.StorageType = collector.DetectStorageTypeByLatency(stats.RandomIOReadAvg)
 		}
 	}
 

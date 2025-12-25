@@ -235,10 +235,16 @@ func generateReport(reportType string, scoreAnalyzer *analyzer.Analyzer, aiAnaly
 
 // runDaemon 守护进程模式
 func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.DiskCollector, mem *collector.MemoryCollector, store *storage.Storage, scoreAnalyzer *analyzer.Analyzer, aiAnalyzer *analyzer.AIAnalyzer, telegramReporter *reporter.TelegramReporter) {
+	// 获取并打印采集间隔配置
+	cpuStealInterval := cfg.GetCPUStealInterval()
+	cpuBenchInterval := cfg.GetCPUBenchInterval()
+	ioTestInterval := cfg.GetIOTestInterval()
+	log.Printf("采集间隔配置: CPU Steal=%v, CPU Bench=%v, I/O Test=%v", cpuStealInterval, cpuBenchInterval, ioTestInterval)
+
 	// 创建定时器
-	cpuStealTicker := time.NewTicker(cfg.GetCPUStealInterval())
-	cpuBenchTicker := time.NewTicker(cfg.GetCPUBenchInterval())
-	ioTestTicker := time.NewTicker(cfg.GetIOTestInterval())
+	cpuStealTicker := time.NewTicker(cpuStealInterval)
+	cpuBenchTicker := time.NewTicker(cpuBenchInterval)
+	ioTestTicker := time.NewTicker(ioTestInterval)
 	cleanupTicker := time.NewTicker(24 * time.Hour)
 	reportCheckTicker := time.NewTicker(1 * time.Minute) // 报告检查定时器
 
@@ -250,7 +256,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// 启动时先采集一次
-	go collectAll(cpu, disk, mem, store)
+	collectAll(cpu, disk, mem, store)
 
 	// 上次发送报告的日期
 	var lastDailyReport, lastWeeklyReport, lastMonthlyReport time.Time
@@ -258,6 +264,7 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	for {
 		select {
 		case <-cpuStealTicker.C:
+			log.Println("[定时任务] 开始采集 CPU Steal/IOWait...")
 			if cpuUsage, err := cpu.Collect(); err == nil {
 				now := time.Now()
 				// 保存 Steal
@@ -273,6 +280,8 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Value:     cpuUsage.IOWaitPercent,
 				})
 				log.Printf("CPU Steal: %.2f%%, IOWait: %.2f%%", cpuUsage.StealPercent, cpuUsage.IOWaitPercent)
+			} else {
+				log.Printf("[定时任务] CPU 采集失败: %v", err)
 			}
 
 			// Load Average 采集
@@ -283,9 +292,12 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Type:      storage.MetricTypeCPULoad,
 					Value:     loadResult.Load1 / numCPU,
 				})
+			} else {
+				log.Printf("[定时任务] Load Average 采集失败: %v", err)
 			}
 
 		case <-cpuBenchTicker.C:
+			log.Println("[定时任务] 开始 CPU 基准测试...")
 			if result, err := cpu.RunBenchmark(); err == nil {
 				store.Save(&storage.Metric{
 					Timestamp: time.Now(),
@@ -293,9 +305,12 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Value:     result.DurationMs,
 				})
 				log.Printf("CPU Bench: %.2fms", result.DurationMs)
+			} else {
+				log.Printf("[定时任务] CPU 基准测试失败: %v", err)
 			}
 
 		case <-ioTestTicker.C:
+			log.Println("[定时任务] 开始 I/O 测试...")
 			if result, err := disk.TestWriteLatency(); err == nil {
 				store.Save(&storage.Metric{
 					Timestamp: time.Now(),
@@ -303,6 +318,8 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 					Value:     result.TotalLatencyMs,
 				})
 				log.Printf("I/O Latency: %.2fms", result.TotalLatencyMs)
+			} else {
+				log.Printf("[定时任务] I/O 延迟测试失败: %v", err)
 			}
 			// 同时采集内存
 			if stats, err := mem.Collect(); err == nil {
@@ -314,6 +331,8 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 						"available_percent": stats.AvailablePercent(),
 					},
 				})
+			} else {
+				log.Printf("[定时任务] 内存采集失败: %v", err)
 			}
 
 		case <-cleanupTicker.C:
