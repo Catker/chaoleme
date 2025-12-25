@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 // DiskCollector 磁盘 I/O 采集器
@@ -251,61 +253,76 @@ type RandomIOResult struct {
 	RandomReadLatencyMs  float64 // 4KB 随机读延迟
 }
 
-// TestRandomIO 执行 4KB 随机读写测试
-// 更接近真实应用场景，有效检测存储性能抖动
-func (d *DiskCollector) TestRandomIO() (*RandomIOResult, error) {
-	const blockSize = 4096 // 4KB
+// alignedBuffer 创建对齐的缓冲区（O_DIRECT 需要内存对齐）
+// alignment 通常为 512 或 4096 字节
+func alignedBuffer(size, alignment int) []byte {
+	// 分配额外空间以确保对齐
+	buf := make([]byte, size+alignment)
+	// 计算对齐偏移
+	offset := alignment - int(uintptr(unsafe.Pointer(&buf[0]))%uintptr(alignment))
+	if offset == alignment {
+		offset = 0
+	}
+	return buf[offset : offset+size]
+}
 
-	// 生成随机数据
-	data := make([]byte, blockSize)
-	if _, err := rand.Read(data); err != nil {
+// TestRandomIO 执行 4KB 随机读写测试
+// 使用 O_DIRECT 绕过页缓存，测量真实磁盘延迟
+func (d *DiskCollector) TestRandomIO() (*RandomIOResult, error) {
+	const blockSize = 4096 // 4KB，也是常见的磁盘扇区/页大小
+
+	// 创建对齐的写入缓冲区（O_DIRECT 需要）
+	writeData := alignedBuffer(blockSize, blockSize)
+	if _, err := rand.Read(writeData); err != nil {
 		return nil, fmt.Errorf("生成随机数据失败: %w", err)
 	}
 
-	// 创建临时文件
+	// 创建临时文件路径
 	tmpFile := filepath.Join(d.testDir, fmt.Sprintf("chaoleme-random-io-%d", time.Now().UnixNano()))
+	defer os.Remove(tmpFile)
 
-	// 测试随机写入
+	// ========== 测试随机写入（使用 O_DIRECT） ==========
 	writeStart := time.Now()
-	file, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+	writeFile, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_DIRECT, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("创建测试文件失败: %w", err)
+		// O_DIRECT 不支持时，回退到普通模式
+		writeFile, err = os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			return nil, fmt.Errorf("创建测试文件失败: %w", err)
+		}
 	}
 
-	_, err = file.Write(data)
+	_, err = writeFile.Write(writeData)
 	if err != nil {
-		file.Close()
-		os.Remove(tmpFile)
+		writeFile.Close()
 		return nil, fmt.Errorf("写入测试数据失败: %w", err)
 	}
 
-	// fsync 确保数据落盘
-	err = file.Sync()
+	// O_DIRECT 模式下数据直接落盘，但仍调用 Sync 确保元数据同步
+	err = writeFile.Sync()
+	writeFile.Close()
 	if err != nil {
-		file.Close()
-		os.Remove(tmpFile)
 		return nil, fmt.Errorf("fsync 失败: %w", err)
 	}
 	writeLatency := time.Since(writeStart)
 
-	// 测试随机读取（先 seek 到文件开头）
-	_, err = file.Seek(0, 0)
+	// ========== 测试随机读取（使用 O_DIRECT 绕过页缓存） ==========
+	// 创建对齐的读取缓冲区
+	readData := alignedBuffer(blockSize, blockSize)
+
+	readStart := time.Now()
+	readFile, err := os.OpenFile(tmpFile, os.O_RDONLY|syscall.O_DIRECT, 0)
 	if err != nil {
-		file.Close()
-		os.Remove(tmpFile)
-		return nil, fmt.Errorf("seek 失败: %w", err)
+		// O_DIRECT 不支持时，回退到普通模式（此时读取会命中缓存）
+		readFile, err = os.OpenFile(tmpFile, os.O_RDONLY, 0)
+		if err != nil {
+			return nil, fmt.Errorf("打开测试文件读取失败: %w", err)
+		}
 	}
 
-	// 尝试绕过页缓存（通过 fadvise 提示）
-	// 注意：Go 标准库不直接支持，但在小文件上影响有限
-
-	readBuf := make([]byte, blockSize)
-	readStart := time.Now()
-	_, err = file.Read(readBuf)
+	_, err = readFile.Read(readData)
 	readLatency := time.Since(readStart)
-
-	file.Close()
-	os.Remove(tmpFile)
+	readFile.Close()
 
 	if err != nil {
 		return nil, fmt.Errorf("读取测试数据失败: %w", err)
