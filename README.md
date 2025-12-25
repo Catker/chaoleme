@@ -21,12 +21,6 @@
 
 ## 📦 快速安装
 
-### 一键安装（推荐）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Catker/chaoleme/main/install.sh | sudo bash
-```
-
 ### 下载预编译版本
 
 从 [Releases](https://github.com/Catker/chaoleme/releases) 下载对应架构的二进制文件：
@@ -39,6 +33,11 @@ tar -xzf chaoleme-linux-amd64.tar.gz
 # arm64
 wget https://github.com/Catker/chaoleme/releases/latest/download/chaoleme-linux-arm64.tar.gz
 tar -xzf chaoleme-linux-arm64.tar.gz
+```
+
+```bash
+chmod +x install.sh
+sudo ./install.sh
 ```
 
 ### 从源码编译
