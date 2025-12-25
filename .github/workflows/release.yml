@@ -1,0 +1,104 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: linux
+            arch: 386
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-i686-linux-gnu
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 1
+        run: |
+          # 设置交叉编译器
+          case "${{ matrix.arch }}" in
+            amd64)
+              export CC=gcc
+              ;;
+            arm64)
+              export CC=aarch64-linux-gnu-gcc
+              ;;
+            386)
+              export CC=i686-linux-gnu-gcc
+              ;;
+          esac
+          
+          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+            -o chaoleme-${{ matrix.os }}-${{ matrix.arch }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaoleme-${{ matrix.os }}-${{ matrix.arch }}
+          path: chaoleme-${{ matrix.os }}-${{ matrix.arch }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            cp "$dir"/* release/ || true
+          done
+          chmod +x release/*
+          
+          # 创建压缩包
+          cd release
+          for file in chaoleme-*; do
+            tar -czvf "${file}.tar.gz" "$file" ../config.yaml.example ../install.sh ../chaoleme.service
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false

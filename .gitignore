@@ -1,0 +1,19 @@
+# 二进制文件
+vps-detector
+vps-detector-*
+
+# 测试数据
+*.db
+data.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# 配置文件（包含敏感信息）
+config.yaml

@@ -1,0 +1,37 @@
+# 超了么 (chaoleme) 配置文件
+
+# Telegram 通知配置
+telegram:
+  bot_token: "YOUR_BOT_TOKEN"  # 从 @BotFather 获取
+  chat_id: "YOUR_CHAT_ID"      # 接收消息的 Chat ID
+
+# 报告配置
+report:
+  daily: true           # 启用日报
+  daily_time: "09:00"   # 日报发送时间 (HH:MM)
+  weekly: true          # 启用周报
+  weekly_day: 0         # 周报发送日 (0=周日, 1=周一, ..., 6=周六)
+  monthly: true         # 启用月报
+  monthly_day: 1        # 月报发送日 (1-28)
+
+# 存储配置
+storage:
+  db_path: "/var/lib/chaoleme/data.db"  # 数据库路径
+  retention_days: 30                         # 数据保留天数
+
+# 采集配置
+collect:
+  cpu_steal_interval: "5m"   # CPU Steal 采集间隔
+  cpu_bench_interval: "30m"  # CPU 基准测试间隔
+  io_test_interval: "15m"    # I/O 延迟测试间隔
+  io_test_size_mb: 4         # I/O 测试文件大小 (MB)
+
+# AI 评价配置（可选）
+ai:
+  enabled: false                                      # 是否启用 AI 分析
+  api_url: "https://api.openai.com/v1/chat/completions"  # OpenAI 兼容 API 地址
+  api_key: "YOUR_API_KEY"                             # API 密钥
+  model: "gpt-4o-mini"                                # 模型名称
+  daily: true    # 日报启用 AI 评价
+  weekly: true   # 周报启用 AI 评价
+  monthly: true  # 月报启用 AI 评价

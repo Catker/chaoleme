@@ -1,0 +1,8 @@
+module github.com/Catker/chaoleme
+
+go 1.25.5
+
+require (
+	github.com/mattn/go-sqlite3 v1.14.32
+	gopkg.in/yaml.v3 v3.0.1
+)

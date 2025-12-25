@@ -1,0 +1,14 @@
+[Unit]
+Description=Chaoleme VPS Overselling Detector
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/chaoleme --config /etc/chaoleme/config.yaml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
