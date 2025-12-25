@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -95,28 +96,23 @@ func main() {
 func collectAll(cpu *collector.CPUCollector, disk *collector.DiskCollector, mem *collector.MemoryCollector, store *storage.Storage) {
 	now := time.Now()
 
-	// CPU Steal
-	if stealPct, err := cpu.CollectStealTime(); err == nil {
+	// CPU Usage (Steal & IOWait)
+	if cpuUsage, err := cpu.Collect(); err == nil {
 		store.Save(&storage.Metric{
 			Timestamp: now,
 			Type:      storage.MetricTypeCPUSteal,
-			Value:     stealPct,
+			Value:     cpuUsage.StealPercent,
 		})
-		log.Printf("CPU Steal: %.2f%%", stealPct)
-	} else {
-		log.Printf("CPU Steal 采集失败: %v", err)
-	}
+		log.Printf("CPU Steal: %.2f%%", cpuUsage.StealPercent)
 
-	// CPU IOWait
-	if iowaitPct, err := cpu.CollectIOWait(); err == nil {
 		store.Save(&storage.Metric{
 			Timestamp: now,
 			Type:      storage.MetricTypeCPUIoWait,
-			Value:     iowaitPct,
+			Value:     cpuUsage.IOWaitPercent,
 		})
-		log.Printf("CPU IOWait: %.2f%%", iowaitPct)
+		log.Printf("CPU IOWait: %.2f%%", cpuUsage.IOWaitPercent)
 	} else {
-		log.Printf("CPU IOWait 采集失败: %v", err)
+		log.Printf("CPU 数据采集失败: %v", err)
 	}
 
 	// CPU 基准测试
@@ -131,7 +127,7 @@ func collectAll(cpu *collector.CPUCollector, disk *collector.DiskCollector, mem 
 		log.Printf("CPU 基准测试失败: %v", err)
 	}
 
-	// I/O 延迟
+	// I/O 顺序延迟
 	if result, err := disk.TestWriteLatency(); err == nil {
 		store.Save(&storage.Metric{
 			Timestamp: now,
@@ -145,6 +141,22 @@ func collectAll(cpu *collector.CPUCollector, disk *collector.DiskCollector, mem 
 		log.Printf("I/O Latency: %.2fms", result.TotalLatencyMs)
 	} else {
 		log.Printf("I/O 延迟测试失败: %v", err)
+	}
+
+	// I/O 随机读写
+	if result, err := disk.TestRandomIO(); err == nil {
+		store.Save(&storage.Metric{
+			Timestamp: now,
+			Type:      storage.MetricTypeRandomIO,
+			Value:     result.RandomWriteLatencyMs, // 主值使用写延迟
+			Extra: map[string]interface{}{
+				"write_latency_ms": result.RandomWriteLatencyMs,
+				"read_latency_ms":  result.RandomReadLatencyMs,
+			},
+		})
+		log.Printf("Random I/O: Write=%.2fms, Read=%.2fms", result.RandomWriteLatencyMs, result.RandomReadLatencyMs)
+	} else {
+		log.Printf("随机 I/O 测试失败: %v", err)
 	}
 
 	// 内存
@@ -163,6 +175,26 @@ func collectAll(cpu *collector.CPUCollector, disk *collector.DiskCollector, mem 
 		log.Printf("Memory Usage: %.1f%%, Available: %.1f%%", stats.UsagePercent(), stats.AvailablePercent())
 	} else {
 		log.Printf("内存采集失败: %v", err)
+	}
+
+	// Load Average
+	if loadResult, err := collector.CollectLoadAverage(); err == nil {
+		numCPU := float64(runtime.NumCPU())
+		normalizedLoad := loadResult.Load1 / numCPU
+		store.Save(&storage.Metric{
+			Timestamp: now,
+			Type:      storage.MetricTypeCPULoad,
+			Value:     normalizedLoad,
+			Extra: map[string]interface{}{
+				"load1":   loadResult.Load1,
+				"load5":   loadResult.Load5,
+				"load15":  loadResult.Load15,
+				"num_cpu": numCPU,
+			},
+		})
+		log.Printf("CPU Load: %.2f (normalized: %.2f)", loadResult.Load1, normalizedLoad)
+	} else {
+		log.Printf("Load Average 采集失败: %v", err)
 	}
 }
 
@@ -225,18 +257,29 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	for {
 		select {
 		case <-cpuStealTicker.C:
-			if stealPct, err := cpu.CollectStealTime(); err == nil {
+			if cpuUsage, err := cpu.Collect(); err == nil {
+				now := time.Now()
+				// 保存 Steal
 				store.Save(&storage.Metric{
-					Timestamp: time.Now(),
+					Timestamp: now,
 					Type:      storage.MetricTypeCPUSteal,
-					Value:     stealPct,
+					Value:     cpuUsage.StealPercent,
+				})
+				// 保存 IOWait
+				store.Save(&storage.Metric{
+					Timestamp: now,
+					Type:      storage.MetricTypeCPUIoWait,
+					Value:     cpuUsage.IOWaitPercent,
 				})
 			}
-			if iowaitPct, err := cpu.CollectIOWait(); err == nil {
+
+			// Load Average 采集
+			if loadResult, err := collector.CollectLoadAverage(); err == nil {
+				numCPU := float64(runtime.NumCPU())
 				store.Save(&storage.Metric{
 					Timestamp: time.Now(),
-					Type:      storage.MetricTypeCPUIoWait,
-					Value:     iowaitPct,
+					Type:      storage.MetricTypeCPULoad,
+					Value:     loadResult.Load1 / numCPU,
 				})
 			}
 

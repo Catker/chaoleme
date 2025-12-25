@@ -88,6 +88,20 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("🧠 内存状态: %s\n", memRisk))
 	buf.WriteString(fmt.Sprintf("   • 可用率: %.1f%%\n\n", stats.MemoryAvailablePercent))
 
+	// CPU Load
+	loadRisk := stats.RiskDetails["cpu_load"]
+	buf.WriteString(fmt.Sprintf("📊 CPU 负载: %s\n", loadRisk))
+	buf.WriteString(fmt.Sprintf("   • Load1 (归一化): %.2f\n", stats.CPULoadAvg))
+	buf.WriteString(fmt.Sprintf("   • 峰值 (归一化): %.2f\n\n", stats.CPULoadMax))
+
+	// Baseline
+	baselineRisk := stats.RiskDetails["baseline"]
+	buf.WriteString(fmt.Sprintf("📈 基线对比: %s\n", baselineRisk))
+	if stats.BaselineDeviation > 0 {
+		buf.WriteString(fmt.Sprintf("   • 偏离度: %.1f%%\n", stats.BaselineDeviation))
+	}
+	buf.WriteString("\n")
+
 	buf.WriteString("━━━━━━━━━━━━━━━━━━\n")
 
 	// 综合评分

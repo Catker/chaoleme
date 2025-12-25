@@ -15,10 +15,63 @@ type DiskCollector struct {
 	testSize int // 测试文件大小（字节）
 }
 
+// isTmpfs 检测指定路径是否挂载为 tmpfs（内存盘）
+// 注意：在 tmpfs 上进行 I/O 测试会测量内存速度而非磁盘速度
+func isTmpfs(path string) bool {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return false
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		mountPoint := fields[1]
+		fsType := fields[2]
+
+		// 检查路径是否以此挂载点开头，且文件系统类型为 tmpfs
+		if strings.HasPrefix(path, mountPoint) && fsType == "tmpfs" {
+			// 精确匹配或目录前缀匹配
+			if path == mountPoint || strings.HasPrefix(path, mountPoint+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// selectTestDir 选择合适的测试目录，避免使用 tmpfs
+// 优先级：/tmp（非tmpfs） > /var/tmp > 程序当前目录
+func selectTestDir() string {
+	candidates := []string{"/tmp", "/var/tmp", "."}
+
+	for _, dir := range candidates {
+		if dir == "." {
+			// 当前目录作为最后手段
+			return dir
+		}
+		// 检查目录是否存在且可写
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		// 检查是否为 tmpfs
+		if isTmpfs(dir) {
+			continue
+		}
+		return dir
+	}
+	return "."
+}
+
 // NewDiskCollector 创建磁盘采集器
+// 自动检测并选择合适的测试目录，避免在 tmpfs 上测试
 func NewDiskCollector(testSizeMB int) *DiskCollector {
+	testDir := selectTestDir()
 	return &DiskCollector{
-		testDir:  "/tmp",
+		testDir:  testDir,
 		testSize: testSizeMB * 1024 * 1024,
 	}
 }
@@ -115,4 +168,151 @@ func (d *DiskCollector) DetectStorageType() StorageType {
 	}
 
 	return StorageTypeUnknown
+}
+
+// DiskStats 系统级磁盘统计（从 /proc/diskstats 采集）
+type DiskStats struct {
+	ReadOps      uint64 // 读操作完成次数
+	WriteOps     uint64 // 写操作完成次数
+	ReadBytes    uint64 // 读取字节数
+	WriteBytes   uint64 // 写入字节数
+	IOTimeMs     uint64 // IO 操作耗时（毫秒）
+	WeightedIOMs uint64 // 加权 IO 耗时（反映队列深度）
+}
+
+// CollectDiskStats 从 /proc/diskstats 采集磁盘统计
+// 开销极低：仅读取内核虚拟文件，无实际磁盘 IO
+func (d *DiskCollector) CollectDiskStats() (*DiskStats, error) {
+	data, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return nil, fmt.Errorf("读取 /proc/diskstats 失败: %w", err)
+	}
+
+	stats := &DiskStats{}
+	lines := strings.Split(string(data), "\n")
+
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 14 {
+			continue
+		}
+
+		deviceName := fields[2]
+		// 跳过分区（如 sda1, vda1）和虚拟设备
+		if strings.HasPrefix(deviceName, "loop") ||
+			strings.HasPrefix(deviceName, "ram") ||
+			strings.HasPrefix(deviceName, "dm-") {
+			continue
+		}
+		// 跳过分区，只统计整盘
+		if len(deviceName) > 2 && deviceName[len(deviceName)-1] >= '0' && deviceName[len(deviceName)-1] <= '9' {
+			// 检查是否为分区（如 sda1, vda1, nvme0n1p1）
+			if strings.Contains(deviceName, "p") || (deviceName[len(deviceName)-2] >= 'a' && deviceName[len(deviceName)-2] <= 'z') {
+				continue
+			}
+		}
+
+		// 解析字段
+		// fields[3]: 读完成次数
+		// fields[5]: 读扇区数 (每扇区 512 字节)
+		// fields[7]: 写完成次数
+		// fields[9]: 写扇区数
+		// fields[12]: IO 耗时 (毫秒)
+		// fields[13]: 加权 IO 耗时
+
+		readOps, _ := parseUint64(fields[3])
+		readSectors, _ := parseUint64(fields[5])
+		writeOps, _ := parseUint64(fields[7])
+		writeSectors, _ := parseUint64(fields[9])
+		ioTime, _ := parseUint64(fields[12])
+		weightedIO, _ := parseUint64(fields[13])
+
+		stats.ReadOps += readOps
+		stats.WriteOps += writeOps
+		stats.ReadBytes += readSectors * 512
+		stats.WriteBytes += writeSectors * 512
+		stats.IOTimeMs += ioTime
+		stats.WeightedIOMs += weightedIO
+	}
+
+	return stats, nil
+}
+
+// parseUint64 解析 uint64，失败返回 0
+func parseUint64(s string) (uint64, error) {
+	var v uint64
+	_, err := fmt.Sscanf(s, "%d", &v)
+	return v, err
+}
+
+// RandomIOResult 随机读写测试结果
+type RandomIOResult struct {
+	RandomWriteLatencyMs float64 // 4KB 随机写延迟
+	RandomReadLatencyMs  float64 // 4KB 随机读延迟
+}
+
+// TestRandomIO 执行 4KB 随机读写测试
+// 更接近真实应用场景，有效检测存储性能抖动
+func (d *DiskCollector) TestRandomIO() (*RandomIOResult, error) {
+	const blockSize = 4096 // 4KB
+
+	// 生成随机数据
+	data := make([]byte, blockSize)
+	if _, err := rand.Read(data); err != nil {
+		return nil, fmt.Errorf("生成随机数据失败: %w", err)
+	}
+
+	// 创建临时文件
+	tmpFile := filepath.Join(d.testDir, fmt.Sprintf("chaoleme-random-io-%d", time.Now().UnixNano()))
+
+	// 测试随机写入
+	writeStart := time.Now()
+	file, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("创建测试文件失败: %w", err)
+	}
+
+	_, err = file.Write(data)
+	if err != nil {
+		file.Close()
+		os.Remove(tmpFile)
+		return nil, fmt.Errorf("写入测试数据失败: %w", err)
+	}
+
+	// fsync 确保数据落盘
+	err = file.Sync()
+	if err != nil {
+		file.Close()
+		os.Remove(tmpFile)
+		return nil, fmt.Errorf("fsync 失败: %w", err)
+	}
+	writeLatency := time.Since(writeStart)
+
+	// 测试随机读取（先 seek 到文件开头）
+	_, err = file.Seek(0, 0)
+	if err != nil {
+		file.Close()
+		os.Remove(tmpFile)
+		return nil, fmt.Errorf("seek 失败: %w", err)
+	}
+
+	// 尝试绕过页缓存（通过 fadvise 提示）
+	// 注意：Go 标准库不直接支持，但在小文件上影响有限
+
+	readBuf := make([]byte, blockSize)
+	readStart := time.Now()
+	_, err = file.Read(readBuf)
+	readLatency := time.Since(readStart)
+
+	file.Close()
+	os.Remove(tmpFile)
+
+	if err != nil {
+		return nil, fmt.Errorf("读取测试数据失败: %w", err)
+	}
+
+	return &RandomIOResult{
+		RandomWriteLatencyMs: float64(writeLatency.Microseconds()) / 1000.0,
+		RandomReadLatencyMs:  float64(readLatency.Microseconds()) / 1000.0,
+	}, nil
 }

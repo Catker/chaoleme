@@ -80,9 +80,13 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 ## 数据摘要
 - CPU Steal Time: 平均 %.2f%%，最大 %.2f%%，P95 %.2f%%
 - CPU 基准测试: 平均耗时 %.2fms，变异系数 %.3f
-- I/O 写延迟: 平均 %.2fms，P95 %.2fms，P99 %.2fms
+- CPU Load (归一化): 平均 %.2f，最大 %.2f
+- I/O 顺序写延迟: 平均 %.2fms，P95 %.2fms，P99 %.2fms
+- I/O 随机延迟: 写 %.2fms，读 %.2fms
+- 磁盘繁忙度: %.1f%%
 - 内存可用率: %.1f%%
 - 存储类型: %s
+- 基线偏离: %.1f%% (%s)
 - 规则评分: %.0f/100
 
 请用中文回复，限制在 150 字以内。格式：
@@ -92,9 +96,13 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 		periodDesc,
 		stats.CPUStealAvg, stats.CPUStealMax, stats.CPUStealP95,
 		stats.CPUBenchAvg, stats.CPUBenchCV,
+		stats.CPULoadAvg, stats.CPULoadMax,
 		stats.IOLatencyAvg, stats.IOLatencyP95, stats.IOLatencyP99,
+		stats.RandomIOWriteAvg, stats.RandomIOReadAvg,
+		stats.DiskBusyPercent,
 		stats.MemoryAvailablePercent,
 		storageType,
+		stats.BaselineDeviation, stats.BaselineStatus,
 		stats.TotalScore,
 	)
 

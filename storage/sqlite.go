@@ -19,7 +19,10 @@ const (
 	MetricTypeCPUIoWait MetricType = "cpu_iowait"
 	MetricTypeCPUBench  MetricType = "cpu_bench"
 	MetricTypeIOLatency MetricType = "io_latency"
+	MetricTypeDiskStats MetricType = "disk_stats" // 磁盘统计（IOPS/吞吐量）
+	MetricTypeRandomIO  MetricType = "random_io"  // 随机 IO 延迟
 	MetricTypeMemory    MetricType = "memory"
+	MetricTypeCPULoad   MetricType = "cpu_load"
 )
 
 // Metric 指标数据

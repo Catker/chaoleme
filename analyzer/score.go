@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -11,11 +12,15 @@ import (
 
 // 评分权重
 const (
-	WeightCPUSteal     = 0.40 // CPU Steal 权重 40%
+	WeightCPUSteal     = 0.35 // CPU Steal 权重 35%
 	WeightCPUIoWait    = 0.10 // CPU IOWait 权重 10%
-	WeightCPUStability = 0.15 // CPU 稳定性权重 15%
-	WeightIOLatency    = 0.25 // I/O 延迟权重 25%
+	WeightCPUStability = 0.10 // CPU 稳定性权重 10%
+	WeightIOLatency    = 0.15 // I/O 顺序延迟权重 15%
+	WeightRandomIO     = 0.10 // I/O 随机延迟权重 10%
+	WeightDiskBusy     = 0.05 // 磁盘繁忙度权重 5%
 	WeightMemory       = 0.10 // 内存权重 10%
+	WeightBaseline     = 0.05 // 基线偏离权重 5%
+	// 注意：CPU Load 不再参与独立评分，改为佐证因子
 )
 
 // RiskLevel 风险等级
@@ -48,13 +53,29 @@ type PeriodStats struct {
 	CPUBenchAvg float64 // 平均耗时
 	CPUBenchCV  float64 // 变异系数 (Coefficient of Variation)
 
-	// I/O 延迟统计
+	// I/O 顺序延迟统计
 	IOLatencyAvg float64
 	IOLatencyP95 float64
 	IOLatencyP99 float64
 
+	// I/O 随机延迟统计
+	RandomIOWriteAvg float64
+	RandomIOReadAvg  float64
+	RandomIOP95      float64
+
+	// 磁盘繁忙度统计
+	DiskBusyPercent float64 // IO 时间占比
+
 	// 内存统计
 	MemoryAvailablePercent float64
+
+	// CPU Load 统计
+	CPULoadAvg float64 // 归一化后的 load1 平均值
+	CPULoadMax float64 // 归一化后的 load1 最大值
+
+	// 基线对比
+	BaselineDeviation float64 // 基线偏离度 (0-100，0 表示无偏离)
+	BaselineStatus    string  // "stable" / "degrading" / "improving"
 
 	// 存储类型
 	StorageType collector.StorageType
@@ -145,6 +166,60 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		}
 	}
 
+	// 计算 CPU Load 统计
+	cpuLoadMetrics, _ := a.store.Query(storage.MetricTypeCPULoad, start, end)
+	if len(cpuLoadMetrics) > 0 {
+		values := extractValues(cpuLoadMetrics)
+		stats.CPULoadAvg = avg(values)
+		stats.CPULoadMax = max(values)
+	}
+
+	// 计算随机 IO 统计
+	randomIOMetrics, _ := a.store.Query(storage.MetricTypeRandomIO, start, end)
+	if len(randomIOMetrics) > 0 {
+		var writeLatencies, readLatencies []float64
+		for _, m := range randomIOMetrics {
+			if m.Extra != nil {
+				if wl, ok := m.Extra["write_latency_ms"].(float64); ok {
+					writeLatencies = append(writeLatencies, wl)
+				}
+				if rl, ok := m.Extra["read_latency_ms"].(float64); ok {
+					readLatencies = append(readLatencies, rl)
+				}
+			}
+		}
+		if len(writeLatencies) > 0 {
+			stats.RandomIOWriteAvg = avg(writeLatencies)
+		}
+		if len(readLatencies) > 0 {
+			stats.RandomIOReadAvg = avg(readLatencies)
+		}
+		// P95 使用写延迟（通常更能反映问题）
+		if len(writeLatencies) > 0 {
+			stats.RandomIOP95 = percentile(writeLatencies, 95)
+		}
+	}
+
+	// 计算磁盘繁忙度（从 disk_stats 采集的增量数据）
+	diskStatsMetrics, _ := a.store.Query(storage.MetricTypeDiskStats, start, end)
+	if len(diskStatsMetrics) >= 2 {
+		// 计算时间段内的平均繁忙度
+		var busyPercents []float64
+		for _, m := range diskStatsMetrics {
+			if m.Extra != nil {
+				if bp, ok := m.Extra["busy_percent"].(float64); ok {
+					busyPercents = append(busyPercents, bp)
+				}
+			}
+		}
+		if len(busyPercents) > 0 {
+			stats.DiskBusyPercent = avg(busyPercents)
+		}
+	}
+
+	// 计算基线偏离
+	stats.BaselineDeviation, stats.BaselineStatus = a.calculateBaselineDeviation(stats)
+
 	// 计算综合评分
 	a.calculateScore(stats)
 
@@ -155,30 +230,58 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 func (a *Analyzer) calculateScore(stats *PeriodStats) {
 	var totalScore float64
 
-	// 1. CPU Steal 评分 (40%)
+	// 计算超售可信度加成（基于本地负载佐证）
+	confidenceBoost := a.calculateOversellConfidenceBoost(stats)
+
+	// 1. CPU Steal 评分 (35%) - 应用佐证因子
 	cpuStealScore := a.scoreCPUSteal(stats.CPUStealAvg)
+	// 当 confidenceBoost > 1 时，低分会变得更低（更严厉）
+	if confidenceBoost > 1.0 && cpuStealScore < 100 {
+		cpuStealScore = cpuStealScore / confidenceBoost
+	}
 	totalScore += cpuStealScore * WeightCPUSteal
 	stats.RiskDetails["cpu_steal"] = a.describeCPUStealRisk(stats.CPUStealAvg, stats.CPUStealMax)
 
-	// 2. CPU IOWait 评分 (10%)
+	// 2. CPU IOWait 评分 (10%) - 应用佐证因子
 	cpuIoWaitScore := a.scoreCPUIoWait(stats.CPUIoWaitAvg)
+	if confidenceBoost > 1.0 && cpuIoWaitScore < 100 {
+		cpuIoWaitScore = cpuIoWaitScore / confidenceBoost
+	}
 	totalScore += cpuIoWaitScore * WeightCPUIoWait
 	stats.RiskDetails["cpu_iowait"] = a.describeCPUIoWaitRisk(stats.CPUIoWaitAvg)
 
-	// 3. CPU 稳定性评分 (15%)
+	// 3. CPU 稳定性评分 (10%)
 	cpuStabilityScore := a.scoreCPUStability(stats.CPUBenchCV)
 	totalScore += cpuStabilityScore * WeightCPUStability
 	stats.RiskDetails["cpu_stability"] = a.describeCPUStabilityRisk(stats.CPUBenchCV)
 
-	// 4. I/O 延迟评分 (25%)
+	// 4. I/O 顺序延迟评分 (15%)
 	ioScore := a.scoreIOLatency(stats.IOLatencyP95, stats.StorageType)
 	totalScore += ioScore * WeightIOLatency
 	stats.RiskDetails["io_latency"] = a.describeIOLatencyRisk(stats.IOLatencyP95, stats.StorageType)
 
-	// 5. 内存评分 (10%)
+	// 5. I/O 随机延迟评分 (10%)
+	randomIOScore := a.scoreRandomIO(stats.RandomIOP95, stats.StorageType)
+	totalScore += randomIOScore * WeightRandomIO
+	stats.RiskDetails["random_io"] = a.describeRandomIORisk(stats.RandomIOWriteAvg, stats.RandomIOReadAvg, stats.StorageType)
+
+	// 6. 磁盘繁忙度评分 (5%)
+	diskBusyScore := a.scoreDiskBusy(stats.DiskBusyPercent)
+	totalScore += diskBusyScore * WeightDiskBusy
+	stats.RiskDetails["disk_busy"] = a.describeDiskBusyRisk(stats.DiskBusyPercent)
+
+	// 7. 内存评分 (10%)
 	memoryScore := a.scoreMemory(stats.MemoryAvailablePercent)
 	totalScore += memoryScore * WeightMemory
 	stats.RiskDetails["memory"] = a.describeMemoryRisk(stats.MemoryAvailablePercent)
+
+	// 8. CPU Load - 仅作为参考显示，不参与评分
+	stats.RiskDetails["cpu_load"] = a.describeCPULoadReference(stats.CPULoadAvg, stats.CPULoadMax)
+
+	// 9. 基线偏离评分 (5%)
+	baselineScore := a.scoreBaselineDeviation(stats.BaselineDeviation)
+	totalScore += baselineScore * WeightBaseline
+	stats.RiskDetails["baseline"] = a.describeBaselineStatus(stats.BaselineDeviation, stats.BaselineStatus)
 
 	stats.TotalScore = totalScore
 
@@ -317,6 +420,79 @@ func (a *Analyzer) describeIOLatencyRisk(p95 float64, storageType collector.Stor
 	}
 }
 
+// scoreRandomIO 随机 IO 延迟评分
+func (a *Analyzer) scoreRandomIO(p95 float64, storageType collector.StorageType) float64 {
+	// 随机 IO 通常比顺序 IO 慢，阈值放宽
+	if storageType == collector.StorageTypeHDD {
+		switch {
+		case p95 < 100:
+			return 100
+		case p95 < 200:
+			return 70
+		case p95 < 500:
+			return 40
+		default:
+			return 0
+		}
+	}
+
+	// SSD 或未知类型
+	switch {
+	case p95 < 30:
+		return 100
+	case p95 < 80:
+		return 70
+	case p95 < 150:
+		return 40
+	default:
+		return 0
+	}
+}
+
+// describeRandomIORisk 描述随机 IO 风险
+func (a *Analyzer) describeRandomIORisk(writeAvg, readAvg float64, storageType collector.StorageType) string {
+	// 使用写延迟作为主要指标
+	threshold := 30.0
+	if storageType == collector.StorageTypeHDD {
+		threshold = 100.0
+	}
+
+	switch {
+	case writeAvg < threshold:
+		return fmt.Sprintf("✅ 低 (写:%.1fms 读:%.1fms)", writeAvg, readAvg)
+	case writeAvg < threshold*2.5:
+		return fmt.Sprintf("⚠️ 中等 (写:%.1fms 读:%.1fms)", writeAvg, readAvg)
+	default:
+		return fmt.Sprintf("🔴 严重 (写:%.1fms 读:%.1fms)", writeAvg, readAvg)
+	}
+}
+
+// scoreDiskBusy 磁盘繁忙度评分
+func (a *Analyzer) scoreDiskBusy(busyPercent float64) float64 {
+	switch {
+	case busyPercent < 30:
+		return 100
+	case busyPercent < 60:
+		return 70
+	case busyPercent < 85:
+		return 40
+	default:
+		return 0
+	}
+}
+
+// describeDiskBusyRisk 描述磁盘繁忙度风险
+func (a *Analyzer) describeDiskBusyRisk(busyPercent float64) string {
+	switch {
+	case busyPercent < 30:
+		return fmt.Sprintf("✅ 低 (%.1f%%)", busyPercent)
+	case busyPercent < 60:
+		return fmt.Sprintf("⚠️ 中等 (%.1f%%)", busyPercent)
+	default:
+		return fmt.Sprintf("🔴 高 (%.1f%%)", busyPercent)
+	}
+}
+
 // scoreMemory 内存评分
 func (a *Analyzer) scoreMemory(availablePercent float64) float64 {
 	switch {
@@ -339,6 +515,153 @@ func (a *Analyzer) describeMemoryRisk(availablePercent float64) string {
 	default:
 		return "🔴 不足"
 	}
+}
+
+// calculateOversellConfidenceBoost 计算超售可信度加成
+// 当本地负载低但 steal/iowait 高时，增加超售检测的可信度
+func (a *Analyzer) calculateOversellConfidenceBoost(stats *PeriodStats) float64 {
+	// 只有当本地负载较低时才应用加成
+	if stats.CPULoadAvg >= 0.7 {
+		return 1.0 // 本地负载高，不加成
+	}
+
+	// 本地负载低，检查是否有超售迹象
+	hasStealIssue := stats.CPUStealAvg > 3.0
+	hasIoWaitIssue := stats.CPUIoWaitAvg > 5.0
+
+	if hasStealIssue || hasIoWaitIssue {
+		// 负载越低，可信度加成越高（最高 1.2）
+		boost := 1.0 + (0.7-stats.CPULoadAvg)*0.3
+		if boost > 1.2 {
+			boost = 1.2
+		}
+		return boost
+	}
+
+	return 1.0
+}
+
+// describeCPULoadReference 描述 CPU Load 参考值（不参与评分）
+func (a *Analyzer) describeCPULoadReference(avg, max float64) string {
+	var status string
+	switch {
+	case avg < 0.7:
+		status = "空闲"
+	case avg < 1.0:
+		status = "正常"
+	case avg < 2.0:
+		status = "较高"
+	default:
+		status = "过载"
+	}
+	return fmt.Sprintf("📊 %.2f (%s) [参考值]", avg, status)
+}
+
+// scoreBaselineDeviation 基线偏离评分
+// deviation: 0-100，0 表示无偏离
+func (a *Analyzer) scoreBaselineDeviation(deviation float64) float64 {
+	switch {
+	case deviation < 10:
+		return 100
+	case deviation < 25:
+		return 70
+	case deviation < 50:
+		return 40
+	default:
+		return 20
+	}
+}
+
+// describeBaselineStatus 描述基线状态
+func (a *Analyzer) describeBaselineStatus(deviation float64, status string) string {
+	if status == "" {
+		status = "stable"
+	}
+	switch status {
+	case "stable":
+		return "✅ 稳定"
+	case "improving":
+		return "📈 改善中"
+	case "degrading":
+		if deviation > 25 {
+			return "🔴 明显下降"
+		}
+		return "⚠️ 轻微下降"
+	default:
+		return "✅ 稳定"
+	}
+}
+
+// calculateBaselineDeviation 计算与历史基线的偏离度
+func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, string) {
+	// 查询过去 7 天的历史数据作为基线
+	baselineEnd := stats.StartTime
+	baselineStart := baselineEnd.AddDate(0, 0, -7)
+
+	// 获取基线期间的各项指标
+	baselineSteal, _ := a.store.Query(storage.MetricTypeCPUSteal, baselineStart, baselineEnd)
+	baselineIO, _ := a.store.Query(storage.MetricTypeIOLatency, baselineStart, baselineEnd)
+	baselineLoad, _ := a.store.Query(storage.MetricTypeCPULoad, baselineStart, baselineEnd)
+
+	// 如果没有足够的历史数据，返回稳定状态
+	if len(baselineSteal) < 10 && len(baselineIO) < 10 {
+		return 0, "stable"
+	}
+
+	var deviations []float64
+	var totalDeviation float64
+
+	// 计算 CPU Steal 偏离
+	if len(baselineSteal) > 0 {
+		baselineStealAvg := avg(extractValues(baselineSteal))
+		if baselineStealAvg > 0 {
+			stealDeviation := (stats.CPUStealAvg - baselineStealAvg) / baselineStealAvg * 100
+			deviations = append(deviations, stealDeviation)
+		}
+	}
+
+	// 计算 I/O 延迟偏离
+	if len(baselineIO) > 0 {
+		baselineIOAvg := avg(extractValues(baselineIO))
+		if baselineIOAvg > 0 {
+			ioDeviation := (stats.IOLatencyAvg - baselineIOAvg) / baselineIOAvg * 100
+			deviations = append(deviations, ioDeviation)
+		}
+	}
+
+	// 计算 CPU Load 偏离
+	if len(baselineLoad) > 0 {
+		baselineLoadAvg := avg(extractValues(baselineLoad))
+		if baselineLoadAvg > 0 {
+			loadDeviation := (stats.CPULoadAvg - baselineLoadAvg) / baselineLoadAvg * 100
+			deviations = append(deviations, loadDeviation)
+		}
+	}
+
+	// 计算平均偏离度
+	if len(deviations) > 0 {
+		for _, d := range deviations {
+			totalDeviation += d
+		}
+		totalDeviation /= float64(len(deviations))
+	}
+
+	// 确定状态
+	var status string
+	if totalDeviation > 10 {
+		status = "degrading"
+	} else if totalDeviation < -10 {
+		status = "improving"
+	} else {
+		status = "stable"
+	}
+
+	// 返回偏离度的绝对值
+	if totalDeviation < 0 {
+		totalDeviation = -totalDeviation
+	}
+
+	return totalDeviation, status
 }
 
 // 辅助函数

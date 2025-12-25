@@ -84,62 +84,45 @@ func readCPUStats() (*CPUStats, error) {
 	return nil, fmt.Errorf("未找到 cpu 行")
 }
 
-// CollectStealTime 采集 CPU steal time 百分比
-func (c *CPUCollector) CollectStealTime() (float64, error) {
+// CPUUsageResult CPU 使用率采集结果（统一采集，确保数据准确性）
+// CPUUsage 包含单次采集的 CPU 指标
+type CPUUsage struct {
+	StealPercent  float64
+	IOWaitPercent float64
+}
+
+// Collect 统一采集 CPU 指标（Steal 和 IOWait）
+func (c *CPUCollector) Collect() (*CPUUsage, error) {
 	current, err := readCPUStats()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if c.lastStats == nil {
 		c.lastStats = current
-		// 等待一小段时间再采集
+		// 等待一小段时间再采集，确保有时间差
 		time.Sleep(100 * time.Millisecond)
 		current, err = readCPUStats()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 
 	totalDelta := current.Total() - c.lastStats.Total()
 	stealDelta := current.Steal - c.lastStats.Steal
+	iowaitDelta := current.IOWait - c.lastStats.IOWait
 
+	// 更新 lastStats
 	c.lastStats = current
 
 	if totalDelta == 0 {
-		return 0, nil
+		return &CPUUsage{0, 0}, nil
 	}
 
-	stealPercent := float64(stealDelta) / float64(totalDelta) * 100
-	return stealPercent, nil
-}
-
-// CollectIOWait 采集 CPU iowait 百分比
-func (c *CPUCollector) CollectIOWait() (float64, error) {
-	current, err := readCPUStats()
-	if err != nil {
-		return 0, err
-	}
-
-	if c.lastStats == nil {
-		c.lastStats = current
-		time.Sleep(100 * time.Millisecond)
-		current, err = readCPUStats()
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	totalDelta := current.Total() - c.lastStats.Total()
-	iowaitDelta := current.IOWait - c.lastStats.IOWait
-
-	// 注意：不更新 lastStats，由 CollectStealTime 负责
-	if totalDelta == 0 {
-		return 0, nil
-	}
-
-	iowaitPercent := float64(iowaitDelta) / float64(totalDelta) * 100
-	return iowaitPercent, nil
+	return &CPUUsage{
+		StealPercent:  float64(stealDelta) / float64(totalDelta) * 100,
+		IOWaitPercent: float64(iowaitDelta) / float64(totalDelta) * 100,
+	}, nil
 }
 
 // BenchmarkResult CPU 基准测试结果

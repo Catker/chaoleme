@@ -99,14 +99,12 @@ do_install() {
     local BIN_DIR="$INSTALL_DIR/bin"
     local CONFIG_DIR="$INSTALL_DIR/config"
     local DATA_DIR="$INSTALL_DIR/data"
-    local LOG_DIR="$INSTALL_DIR/logs"
     
     echo ""
     echo -e "${BLUE}安装目录: $INSTALL_DIR${NC}"
     echo -e "${BLUE}  - 二进制: $BIN_DIR${NC}"
     echo -e "${BLUE}  - 配置:   $CONFIG_DIR${NC}"
     echo -e "${BLUE}  - 数据:   $DATA_DIR${NC}"
-    echo -e "${BLUE}  - 日志:   $LOG_DIR${NC}"
     echo ""
     
     # 停止现有服务（如果存在）
@@ -120,7 +118,6 @@ do_install() {
     mkdir -p "$BIN_DIR"
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$DATA_DIR"
-    mkdir -p "$LOG_DIR"
     
     # 复制二进制文件
     echo -e "${YELLOW}安装二进制文件...${NC}"
