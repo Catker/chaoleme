@@ -47,7 +47,7 @@ func New(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
 	}
