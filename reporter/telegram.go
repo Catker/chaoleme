@@ -16,14 +16,16 @@ import (
 type TelegramReporter struct {
 	botToken string
 	chatID   string
+	hostname string
 	client   *http.Client
 }
 
 // NewTelegramReporter 创建 Telegram 报告器
-func NewTelegramReporter(cfg *config.TelegramConfig) *TelegramReporter {
+func NewTelegramReporter(cfg *config.TelegramConfig, hostname string) *TelegramReporter {
 	return &TelegramReporter{
 		botToken: cfg.BotToken,
 		chatID:   cfg.ChatID,
+		hostname: hostname,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -53,7 +55,8 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 		title = "📊 超了么报告"
 	}
 
-	buf.WriteString(title + "\n")
+	// 添加主机标识
+	buf.WriteString(fmt.Sprintf("%s | 🖥️ %s\n", title, r.hostname))
 	buf.WriteString(fmt.Sprintf("📅 %s\n\n", stats.EndTime.Format("2006-01-02")))
 	buf.WriteString("━━━━━━━━━━━━━━━━━━\n")
 

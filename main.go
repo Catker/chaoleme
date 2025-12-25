@@ -54,7 +54,7 @@ func main() {
 	defer store.Close()
 
 	// 初始化 Telegram 报告器
-	telegramReporter := reporter.NewTelegramReporter(&cfg.Telegram)
+	telegramReporter := reporter.NewTelegramReporter(&cfg.Telegram, cfg.Hostname)
 
 	if *testTelegram {
 		if err := telegramReporter.TestConnection(); err != nil {

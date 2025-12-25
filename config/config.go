@@ -10,6 +10,7 @@ import (
 
 // Config 主配置结构
 type Config struct {
+	Hostname string         `yaml:"hostname"` // 主机标识，用于多机器推送区分（可选，未填则自动获取系统主机名）
 	Telegram TelegramConfig `yaml:"telegram"`
 	Report   ReportConfig   `yaml:"report"`
 	Storage  StorageConfig  `yaml:"storage"`
@@ -100,6 +101,15 @@ func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	// 如果未配置 hostname，自动获取系统主机名
+	if cfg.Hostname == "" {
+		if hostname, err := os.Hostname(); err == nil {
+			cfg.Hostname = hostname
+		} else {
+			cfg.Hostname = "unknown"
+		}
 	}
 
 	if err := cfg.Validate(); err != nil {

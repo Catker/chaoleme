@@ -1,5 +1,8 @@
 # 超了么 (chaoleme) 配置文件
 
+# 主机标识（可选，用于多机器推送区分，未填则自动获取系统主机名）
+# hostname: "Tokyo-VPS-01"
+
 # Telegram 通知配置
 telegram:
   bot_token: "YOUR_BOT_TOKEN"  # 从 @BotFather 获取
