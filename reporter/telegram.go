@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Catker/chaoleme/analyzer"
@@ -35,7 +36,7 @@ func NewTelegramReporter(cfg *config.TelegramConfig, hostname string) *TelegramR
 // SendReport 发送报告
 func (r *TelegramReporter) SendReport(stats *analyzer.PeriodStats, aiAnalysis string) error {
 	message := r.formatReport(stats, aiAnalysis)
-	return r.sendMessage(message)
+	return r.sendMessageWithRetry(message, 3)
 }
 
 // formatReport 格式化报告
@@ -73,15 +74,26 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("   • IOWait 平均: %.2f%%\n", stats.CPUIoWaitAvg))
 	buf.WriteString(fmt.Sprintf("   • IOWait 峰值: %.2f%%\n\n", stats.CPUIoWaitMax))
 
-	// I/O
+	// I/O 顺序写
 	ioRisk := stats.RiskDetails["io_latency"]
-	buf.WriteString(fmt.Sprintf("💾 I/O 超售风险: %s\n", ioRisk))
-	buf.WriteString(fmt.Sprintf("   • 写延迟 P95: %.2fms\n", stats.IOLatencyP95))
-	buf.WriteString(fmt.Sprintf("   • 写延迟 P99: %.2fms\n", stats.IOLatencyP99))
+	buf.WriteString(fmt.Sprintf("💾 顺序写延迟: %s\n", ioRisk))
+	buf.WriteString(fmt.Sprintf("   • P95: %.2fms\n", stats.IOLatencyP95))
+	buf.WriteString(fmt.Sprintf("   • P99: %.2fms\n", stats.IOLatencyP99))
 	if stats.StorageType != "" {
 		buf.WriteString(fmt.Sprintf("   • 存储类型: %s\n", stats.StorageType))
 	}
 	buf.WriteString("\n")
+
+	// I/O 随机读写
+	randomIORisk := stats.RiskDetails["random_io"]
+	buf.WriteString(fmt.Sprintf("🎲 随机 I/O: %s\n", randomIORisk))
+	buf.WriteString(fmt.Sprintf("   • 写延迟: %.2fms\n", stats.RandomIOWriteAvg))
+	buf.WriteString(fmt.Sprintf("   • 读延迟: %.2fms\n", stats.RandomIOReadAvg))
+	buf.WriteString("\n")
+
+	// 磁盘繁忙度
+	diskBusyRisk := stats.RiskDetails["disk_busy"]
+	buf.WriteString(fmt.Sprintf("📀 磁盘繁忙度: %s\n\n", diskBusyRisk))
 
 	// Memory
 	memRisk := stats.RiskDetails["memory"]
@@ -133,13 +145,44 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	return buf.String()
 }
 
+// escapeHTML 转义 HTML 特殊字符，避免被 Telegram 解析为 HTML 标签
+func escapeHTML(text string) string {
+	// 按顺序替换：先 &，再 < 和 >
+	text = strings.ReplaceAll(text, "&", "&amp;")
+	text = strings.ReplaceAll(text, "<", "&lt;")
+	text = strings.ReplaceAll(text, ">", "&gt;")
+	return text
+}
+
+// sendMessageWithRetry 发送消息到 Telegram（带重试机制）
+func (r *TelegramReporter) sendMessageWithRetry(text string, maxRetries int) error {
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			// 指数退避：1s, 2s, 4s...
+			wait := time.Duration(1<<uint(i-1)) * time.Second
+			time.Sleep(wait)
+		}
+		if err := r.sendMessage(text); err != nil {
+			lastErr = err
+			// 记录重试日志（内部不再 import log，通过返回错误传递）
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("发送失败（重试 %d 次）: %w", maxRetries, lastErr)
+}
+
 // sendMessage 发送消息到 Telegram
 func (r *TelegramReporter) sendMessage(text string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", r.botToken)
 
+	// 转义 HTML 特殊字符
+	escapedText := escapeHTML(text)
+
 	payload := map[string]interface{}{
 		"chat_id":    r.chatID,
-		"text":       text,
+		"text":       escapedText,
 		"parse_mode": "HTML",
 	}
 
