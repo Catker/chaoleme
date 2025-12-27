@@ -26,7 +26,7 @@ var (
 	version      = flag.Bool("version", false, "显示版本信息")
 )
 
-const Version = "1.0.0"
+var Version = "1.1.0"
 
 func main() {
 	flag.Parse()
@@ -175,6 +175,26 @@ func collectAll(cpu *collector.CPUCollector, disk *collector.DiskCollector, mem 
 		log.Printf("Memory Usage: %.1f%%, Available: %.1f%%", stats.UsagePercent(), stats.AvailablePercent())
 	} else {
 		log.Printf("内存采集失败: %v", err)
+	}
+
+	// DiskStats 磁盘统计（从 /proc/diskstats 采集，开销极低）
+	if diskStats, err := disk.CollectDiskStats(); err == nil {
+		store.Save(&storage.Metric{
+			Timestamp: now,
+			Type:      storage.MetricTypeDiskStats,
+			Value:     float64(diskStats.IOTimeMs), // 主值使用累计 IO 耗时
+			Extra: map[string]interface{}{
+				"read_ops":       diskStats.ReadOps,
+				"write_ops":      diskStats.WriteOps,
+				"read_bytes":     diskStats.ReadBytes,
+				"write_bytes":    diskStats.WriteBytes,
+				"io_time_ms":     diskStats.IOTimeMs,
+				"weighted_io_ms": diskStats.WeightedIOMs,
+			},
+		})
+		log.Printf("Disk Stats: ReadOps=%d, WriteOps=%d, IOTime=%dms", diskStats.ReadOps, diskStats.WriteOps, diskStats.IOTimeMs)
+	} else {
+		log.Printf("磁盘统计采集失败: %v", err)
 	}
 
 	// Load Average
@@ -333,6 +353,25 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 				})
 			} else {
 				log.Printf("[定时任务] 内存采集失败: %v", err)
+			}
+			// 磁盘统计（从 /proc/diskstats 采集，开销极低）
+			if diskStats, err := disk.CollectDiskStats(); err == nil {
+				store.Save(&storage.Metric{
+					Timestamp: time.Now(),
+					Type:      storage.MetricTypeDiskStats,
+					Value:     float64(diskStats.IOTimeMs),
+					Extra: map[string]interface{}{
+						"read_ops":       diskStats.ReadOps,
+						"write_ops":      diskStats.WriteOps,
+						"read_bytes":     diskStats.ReadBytes,
+						"write_bytes":    diskStats.WriteBytes,
+						"io_time_ms":     diskStats.IOTimeMs,
+						"weighted_io_ms": diskStats.WeightedIOMs,
+					},
+				})
+				log.Printf("Disk Stats: ReadOps=%d, WriteOps=%d", diskStats.ReadOps, diskStats.WriteOps)
+			} else {
+				log.Printf("[定时任务] 磁盘统计采集失败: %v", err)
 			}
 
 		case <-cleanupTicker.C:

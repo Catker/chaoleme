@@ -101,7 +101,8 @@ func (c *CPUCollector) Collect() (*CPUUsage, error) {
 	if c.lastStats == nil {
 		c.lastStats = current
 		// 等待一小段时间再采集，确保有时间差
-		time.Sleep(100 * time.Millisecond)
+		// 使用 500ms 而非 100ms，减少瞬时波动对 Steal/IOWait 计算的影响
+		time.Sleep(500 * time.Millisecond)
 		current, err = readCPUStats()
 		if err != nil {
 			return nil, err

@@ -1,6 +1,7 @@
 #!/bin/bash
-# 超了么 (chaoleme) 一键安装/卸载脚本
+# 超了么 (chaoleme) 一键安装脚本
 # 适用于 Debian/Ubuntu 系统
+# 卸载请使用 uninstall.sh
 
 set -e
 
@@ -24,13 +25,13 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  install [目录]    安装到指定目录 (默认: $DEFAULT_INSTALL_DIR)"
-    echo "  uninstall         完全卸载程序和服务"
     echo "  --help, -h        显示此帮助信息"
     echo ""
     echo "示例:"
     echo "  $0 install                    # 安装到默认目录 /opt/chaoleme"
     echo "  $0 install /home/chaoleme     # 安装到自定义目录"
-    echo "  $0 uninstall                  # 完全卸载"
+    echo ""
+    echo "卸载请使用: ./uninstall.sh"
     echo ""
 }
 
@@ -228,101 +229,7 @@ EOF
     echo -e "  - 发送日报:     ${YELLOW}$BINARY_NAME --report daily${NC}"
     echo -e "  - 发送周报:     ${YELLOW}$BINARY_NAME --report weekly${NC}"
     echo -e "  - 发送月报:     ${YELLOW}$BINARY_NAME --report monthly${NC}"
-    echo -e "  - 卸载程序:     ${YELLOW}$0 uninstall${NC}"
-    echo ""
-}
-
-# 卸载函数
-do_uninstall() {
-    echo -e "${RED}=== 超了么 (chaoleme) 卸载脚本 ===${NC}"
-    echo ""
-    
-    check_root
-    
-    # 读取安装路径
-    local INSTALL_DIR=""
-    if [ -f /etc/chaoleme_install_path ]; then
-        INSTALL_DIR=$(cat /etc/chaoleme_install_path)
-    fi
-    
-    # 确认卸载
-    echo -e "${YELLOW}此操作将完全卸载 chaoleme，包括：${NC}"
-    echo "  - 停止并禁用 systemd 服务"
-    echo "  - 删除二进制文件和命令链接"
-    echo "  - 删除 systemd 服务配置"
-    if [ -n "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR" ]; then
-        echo "  - 删除安装目录: $INSTALL_DIR"
-    fi
-    echo ""
-    echo -e "${RED}注意: 配置文件和数据库将被一并删除！${NC}"
-    echo ""
-    read -p "确定要卸载吗？[y/N] " confirm
-    
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo -e "${YELLOW}已取消卸载${NC}"
-        exit 0
-    fi
-    
-    echo ""
-    
-    # 停止并禁用服务
-    if systemctl is-active --quiet $SERVICE_NAME 2>/dev/null; then
-        echo -e "${YELLOW}停止服务...${NC}"
-        systemctl stop $SERVICE_NAME
-    fi
-    
-    if systemctl is-enabled --quiet $SERVICE_NAME 2>/dev/null; then
-        echo -e "${YELLOW}禁用服务...${NC}"
-        systemctl disable $SERVICE_NAME
-    fi
-    
-    # 删除 systemd 服务文件
-    if [ -f /etc/systemd/system/$SERVICE_NAME.service ]; then
-        echo -e "${YELLOW}删除 systemd 服务...${NC}"
-        rm -f /etc/systemd/system/$SERVICE_NAME.service
-        systemctl daemon-reload
-    fi
-    
-    # 删除命令链接
-    if [ -L /usr/local/bin/$BINARY_NAME ]; then
-        echo -e "${YELLOW}删除命令链接...${NC}"
-        rm -f /usr/local/bin/$BINARY_NAME
-    fi
-    
-    # 删除安装目录
-    if [ -n "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR" ]; then
-        echo -e "${YELLOW}删除安装目录: $INSTALL_DIR${NC}"
-        rm -rf "$INSTALL_DIR"
-    fi
-    
-    # 兼容旧版安装路径
-    # 删除 /usr/local/bin 中的二进制（非链接）
-    if [ -f /usr/local/bin/$BINARY_NAME ] && [ ! -L /usr/local/bin/$BINARY_NAME ]; then
-        echo -e "${YELLOW}删除旧版二进制文件...${NC}"
-        rm -f /usr/local/bin/$BINARY_NAME
-    fi
-    
-    # 删除旧版配置目录
-    if [ -d /etc/chaoleme ]; then
-        echo -e "${YELLOW}删除旧版配置目录: /etc/chaoleme${NC}"
-        rm -rf /etc/chaoleme
-    fi
-    
-    # 删除旧版数据目录
-    if [ -d /var/lib/chaoleme ]; then
-        echo -e "${YELLOW}删除旧版数据目录: /var/lib/chaoleme${NC}"
-        rm -rf /var/lib/chaoleme
-    fi
-    
-    # 删除安装路径记录
-    rm -f /etc/chaoleme_install_path
-    
-    echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                    卸载完成!                              ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "感谢使用超了么 (chaoleme)！"
+    echo -e "  - 卸载程序:     ${YELLOW}./uninstall.sh${NC}"
     echo ""
 }
 
@@ -330,9 +237,6 @@ do_uninstall() {
 case "${1:-}" in
     install)
         do_install "${2:-}"
-        ;;
-    uninstall)
-        do_uninstall
         ;;
     --help|-h)
         show_help
