@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,13 +67,20 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("🖥️ CPU 超售风险: %s\n", cpuRisk))
 	buf.WriteString(fmt.Sprintf("   • Steal Time 平均: %.2f%%\n", stats.CPUStealAvg))
 	buf.WriteString(fmt.Sprintf("   • Steal Time 峰值: %.2f%%\n", stats.CPUStealMax))
+	if !stats.CPUStealMaxTime.IsZero() {
+		buf.WriteString(fmt.Sprintf("   • 峰值时段: %s\n", formatHourRange(stats.CPUStealMaxTime)))
+	}
 	buf.WriteString(fmt.Sprintf("   • 性能波动系数: %.3f\n\n", stats.CPUBenchCV))
 
 	// CPU IOWait
 	iowaitRisk := stats.RiskDetails["cpu_iowait"]
 	buf.WriteString(fmt.Sprintf("⏳ CPU IOWait 风险: %s\n", iowaitRisk))
 	buf.WriteString(fmt.Sprintf("   • IOWait 平均: %.2f%%\n", stats.CPUIoWaitAvg))
-	buf.WriteString(fmt.Sprintf("   • IOWait 峰值: %.2f%%\n\n", stats.CPUIoWaitMax))
+	buf.WriteString(fmt.Sprintf("   • IOWait 峰值: %.2f%%\n", stats.CPUIoWaitMax))
+	if !stats.CPUIoWaitMaxTime.IsZero() {
+		buf.WriteString(fmt.Sprintf("   • 峰值时段: %s\n", formatHourRange(stats.CPUIoWaitMaxTime)))
+	}
+	buf.WriteString("\n")
 
 	// I/O 顺序写
 	ioRisk := stats.RiskDetails["io_latency"]
@@ -93,7 +101,11 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 
 	// 磁盘繁忙度
 	diskBusyRisk := stats.RiskDetails["disk_busy"]
-	buf.WriteString(fmt.Sprintf("📀 磁盘繁忙度: %s\n\n", diskBusyRisk))
+	buf.WriteString(fmt.Sprintf("📀 磁盘繁忙度: %s\n", diskBusyRisk))
+	if stats.DiskBusyP95 > 0 {
+		buf.WriteString(fmt.Sprintf("   • P95: %.1f%%\n", stats.DiskBusyP95))
+	}
+	buf.WriteString("\n")
 
 	// Memory
 	memRisk := stats.RiskDetails["memory"]
@@ -132,6 +144,18 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 		riskDesc = "🔴 严重超售，建议更换"
 	}
 	buf.WriteString(fmt.Sprintf("📋 风险等级: %s\n", riskDesc))
+
+	// 时段分析摘要（仅周报/月报显示）
+	if (stats.Period == "weekly" || stats.Period == "monthly") && len(stats.HourlyBreakdown) > 0 {
+		buf.WriteString("\n📊 时段分析:\n")
+		highHours, lowHours := findHighLowLoadHours(stats.HourlyBreakdown)
+		if len(highHours) > 0 {
+			buf.WriteString(fmt.Sprintf("   • 高负载时段: %s\n", formatHoursList(highHours)))
+		}
+		if len(lowHours) > 0 {
+			buf.WriteString(fmt.Sprintf("   • 低负载时段: %s\n", formatHoursList(lowHours)))
+		}
+	}
 
 	// AI 分析
 	if aiAnalysis != "" {
@@ -208,4 +232,59 @@ func (r *TelegramReporter) sendMessage(text string) error {
 // TestConnection 测试 Telegram 连接
 func (r *TelegramReporter) TestConnection() error {
 	return r.sendMessage("✅ 超了么 (chaoleme) 已连接成功！")
+}
+
+// formatHourRange 格式化单个时间点为小时范围（如 14:00-15:00）
+func formatHourRange(t time.Time) string {
+	hour := t.Hour()
+	return fmt.Sprintf("%02d:00-%02d:00", hour, (hour+1)%24)
+}
+
+// findHighLowLoadHours 从小时级统计中找出高负载和低负载时段
+// 返回高负载时段（Top 3 by steal+iowait 平均）和低负载时段（Bottom 3）
+func findHighLowLoadHours(hourly []analyzer.HourlyStats) (high, low []analyzer.HourlyStats) {
+	if len(hourly) == 0 {
+		return nil, nil
+	}
+
+	// 复制并按负载排序（steal + iowait 平均值）
+	sorted := make([]analyzer.HourlyStats, len(hourly))
+	copy(sorted, hourly)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		loadI := sorted[i].CPUStealAvg + sorted[i].CPUIoWaitAvg
+		loadJ := sorted[j].CPUStealAvg + sorted[j].CPUIoWaitAvg
+		return loadI > loadJ // 降序
+	})
+
+	// 取 Top 3 高负载（仅当负载 > 1%）
+	for i := 0; i < len(sorted) && i < 3; i++ {
+		if sorted[i].CPUStealAvg+sorted[i].CPUIoWaitAvg > 1.0 {
+			high = append(high, sorted[i])
+		}
+	}
+
+	// 取 Bottom 3 低负载（仅当有足够数据）
+	if len(sorted) >= 6 {
+		for i := len(sorted) - 1; i >= len(sorted)-3 && i >= 0; i-- {
+			low = append(low, sorted[i])
+		}
+	}
+
+	return high, low
+}
+
+// formatHoursList 格式化多个小时统计为可读字符串
+func formatHoursList(hours []analyzer.HourlyStats) string {
+	if len(hours) == 0 {
+		return "-"
+	}
+
+	var parts []string
+	for _, h := range hours {
+		parts = append(parts, fmt.Sprintf("%02d:00 (S:%.1f%% W:%.1f%%)",
+			h.Hour, h.CPUStealAvg, h.CPUIoWaitAvg))
+	}
+
+	return strings.Join(parts, ", ")
 }

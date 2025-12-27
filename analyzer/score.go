@@ -33,6 +33,16 @@ const (
 	RiskLevelSevere    RiskLevel = "severe"    // 0-49: 严重
 )
 
+// HourlyStats 小时级统计（用于时段分析）
+type HourlyStats struct {
+	Hour         int     // 0-23 小时
+	SampleCount  int     // 样本数量
+	CPUStealAvg  float64 // CPU Steal 平均值
+	CPUStealMax  float64 // CPU Steal 峰值
+	CPUIoWaitAvg float64 // IOWait 平均值
+	CPUIoWaitMax float64 // IOWait 峰值
+}
+
 // PeriodStats 周期统计数据
 type PeriodStats struct {
 	Period    string    // "daily", "weekly", "monthly"
@@ -40,14 +50,19 @@ type PeriodStats struct {
 	EndTime   time.Time // 统计结束时间
 
 	// CPU Steal 统计
-	CPUStealAvg float64
-	CPUStealMax float64
-	CPUStealP95 float64
+	CPUStealAvg     float64
+	CPUStealMax     float64
+	CPUStealP95     float64
+	CPUStealMaxTime time.Time // 峰值发生时间
 
 	// CPU IOWait 统计
-	CPUIoWaitAvg float64
-	CPUIoWaitMax float64
-	CPUIoWaitP95 float64
+	CPUIoWaitAvg     float64
+	CPUIoWaitMax     float64
+	CPUIoWaitP95     float64
+	CPUIoWaitMaxTime time.Time // 峰值发生时间
+
+	// 时段分布（用于周报/月报分析）
+	HourlyBreakdown []HourlyStats
 
 	// CPU 基准测试统计
 	CPUBenchAvg float64 // 平均耗时
@@ -64,7 +79,8 @@ type PeriodStats struct {
 	RandomIOP95      float64
 
 	// 磁盘繁忙度统计
-	DiskBusyPercent float64 // IO 时间占比
+	DiskBusyPercent float64 // IO 时间占比（平均）
+	DiskBusyP95     float64 // IO 时间占比（P95）
 
 	// 内存统计
 	MemoryAvailablePercent float64
@@ -119,8 +135,10 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	if len(cpuStealMetrics) > 0 {
 		values := extractValues(cpuStealMetrics)
 		stats.CPUStealAvg = avg(values)
-		stats.CPUStealMax = max(values)
+		stats.CPUStealMax = percentile(values, 99) // 使用 P99 作为实用峰值，避免极端异常干扰
 		stats.CPUStealP95 = percentile(values, 95)
+		// 记录峰值发生时间
+		_, stats.CPUStealMaxTime = findMaxWithTime(cpuStealMetrics)
 	}
 
 	// 计算 CPU IOWait 统计
@@ -128,8 +146,15 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	if len(cpuIoWaitMetrics) > 0 {
 		values := extractValues(cpuIoWaitMetrics)
 		stats.CPUIoWaitAvg = avg(values)
-		stats.CPUIoWaitMax = max(values)
+		stats.CPUIoWaitMax = percentile(values, 99) // 使用 P99 作为实用峰值
 		stats.CPUIoWaitP95 = percentile(values, 95)
+		// 记录峰值发生时间
+		_, stats.CPUIoWaitMaxTime = findMaxWithTime(cpuIoWaitMetrics)
+	}
+
+	// 计算时段分布（用于周报/月报分析）
+	if len(cpuStealMetrics) > 0 || len(cpuIoWaitMetrics) > 0 {
+		stats.HourlyBreakdown = calculateHourlyBreakdown(cpuStealMetrics, cpuIoWaitMetrics)
 	}
 
 	// 计算 CPU 基准测试统计
@@ -147,17 +172,22 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		stats.IOLatencyP99 = percentile(values, 99)
 	}
 
-	// 计算内存统计（取最新值）
+	// 计算内存统计（使用平均可用率，而非单点值）
 	if len(memoryMetrics) > 0 {
-		// 从 extra 字段获取可用率
-		latest := memoryMetrics[len(memoryMetrics)-1]
-		if latest.Extra != nil {
-			if availPct, ok := latest.Extra["available_percent"].(float64); ok {
-				stats.MemoryAvailablePercent = availPct
+		var availPercents []float64
+		for _, m := range memoryMetrics {
+			if m.Extra != nil {
+				if availPct, ok := m.Extra["available_percent"].(float64); ok {
+					availPercents = append(availPercents, availPct)
+				}
 			}
 		}
-		if stats.MemoryAvailablePercent == 0 {
-			stats.MemoryAvailablePercent = 100 - latest.Value // Value 存储使用率
+		if len(availPercents) > 0 {
+			stats.MemoryAvailablePercent = avg(availPercents)
+		} else {
+			// 降级：从 Value（使用率）计算可用率
+			values := extractValues(memoryMetrics)
+			stats.MemoryAvailablePercent = 100 - avg(values)
 		}
 	}
 
@@ -166,7 +196,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	if len(cpuLoadMetrics) > 0 {
 		values := extractValues(cpuLoadMetrics)
 		stats.CPULoadAvg = avg(values)
-		stats.CPULoadMax = max(values)
+		stats.CPULoadMax = percentile(values, 99) // 使用 P99 作为实用峰值
 	}
 
 	// 计算随机 IO 统计
@@ -214,6 +244,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		}
 		if len(busyPercents) > 0 {
 			stats.DiskBusyPercent = avg(busyPercents)
+			stats.DiskBusyP95 = percentile(busyPercents, 95) // 添加 P95 感知 IO 抖动
 		}
 	}
 
@@ -736,4 +767,81 @@ func coefficientOfVariation(values []float64) float64 {
 	stdDev := math.Sqrt(sumSquares / float64(len(values)))
 
 	return stdDev / mean
+}
+
+// findMaxWithTime 找到最大值及其发生时间
+func findMaxWithTime(metrics []*storage.Metric) (float64, time.Time) {
+	if len(metrics) == 0 {
+		return 0, time.Time{}
+	}
+
+	maxVal := metrics[0].Value
+	maxTime := metrics[0].Timestamp
+
+	for _, m := range metrics[1:] {
+		if m.Value > maxVal {
+			maxVal = m.Value
+			maxTime = m.Timestamp
+		}
+	}
+
+	return maxVal, maxTime
+}
+
+// calculateHourlyBreakdown 按小时聚合 CPU Steal 和 IOWait 统计
+func calculateHourlyBreakdown(stealMetrics, iowaitMetrics []*storage.Metric) []HourlyStats {
+	// 按小时分组数据
+	type hourData struct {
+		stealValues  []float64
+		iowaitValues []float64
+	}
+
+	hourlyData := make(map[int]*hourData)
+
+	// 收集 CPU Steal 数据
+	for _, m := range stealMetrics {
+		hour := m.Timestamp.Hour()
+		if hourlyData[hour] == nil {
+			hourlyData[hour] = &hourData{}
+		}
+		hourlyData[hour].stealValues = append(hourlyData[hour].stealValues, m.Value)
+	}
+
+	// 收集 IOWait 数据
+	for _, m := range iowaitMetrics {
+		hour := m.Timestamp.Hour()
+		if hourlyData[hour] == nil {
+			hourlyData[hour] = &hourData{}
+		}
+		hourlyData[hour].iowaitValues = append(hourlyData[hour].iowaitValues, m.Value)
+	}
+
+	// 生成按小时的统计结果
+	var result []HourlyStats
+	for hour := 0; hour < 24; hour++ {
+		data := hourlyData[hour]
+		if data == nil {
+			continue
+		}
+
+		hs := HourlyStats{Hour: hour}
+
+		if len(data.stealValues) > 0 {
+			hs.SampleCount = len(data.stealValues)
+			hs.CPUStealAvg = avg(data.stealValues)
+			hs.CPUStealMax = max(data.stealValues)
+		}
+
+		if len(data.iowaitValues) > 0 {
+			if len(data.iowaitValues) > hs.SampleCount {
+				hs.SampleCount = len(data.iowaitValues)
+			}
+			hs.CPUIoWaitAvg = avg(data.iowaitValues)
+			hs.CPUIoWaitMax = max(data.iowaitValues)
+		}
+
+		result = append(result, hs)
+	}
+
+	return result
 }
