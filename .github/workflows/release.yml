@@ -56,7 +56,9 @@ jobs:
               ;;
           esac
           
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+          # 去掉 tag 的 v 前缀
+          VERSION=${GITHUB_REF_NAME#v}
+          go build -ldflags="-s -w -X main.Version=${VERSION}" \
             -o chaoleme-${{ matrix.os }}-${{ matrix.arch }} .
 
       - name: Upload artifact

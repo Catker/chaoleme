@@ -3,12 +3,10 @@
 # 用法: ./update.sh [版本号]
 # 示例: ./update.sh         # 更新到最新版本
 #       ./update.sh v1.2.0  # 更新到指定版本
-
-set -e
-
+#       ./update.sh rollback # 回滚到上一版本
 # ========== 配置 ==========
 REPO="Catker/chaoleme"
-INSTALL_DIR="/opt/chaoleme"
+INSTALL_DIR="/opt/chaoleme/bin"
 BINARY_NAME="chaoleme"
 SERVICE_NAME="chaoleme"
 BACKUP_DIR="/opt/chaoleme/backup"
@@ -19,13 +17,14 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # ========== 检测系统架构 ==========
 detect_arch() {
-    local arch=$(uname -m)
+    local arch
+    arch=$(uname -m)
     case "$arch" in
         x86_64)  echo "amd64" ;;
         aarch64) echo "arm64" ;;
@@ -33,24 +32,36 @@ detect_arch() {
         i686|i386) echo "386" ;;
         *)
             log_error "不支持的架构: $arch"
-            exit 1
+            return 1
             ;;
     esac
 }
 
 # ========== 获取当前版本 ==========
 get_current_version() {
-    if [[ -x "$INSTALL_DIR/$BINARY_NAME" ]]; then
-        "$INSTALL_DIR/$BINARY_NAME" -version 2>/dev/null | awk '{print $2}' | sed 's/^v//'
-    else
+    local version=""
+    # 优先使用 PATH 中的命令
+    if command -v "$BINARY_NAME" &> /dev/null; then
+        version=$("$BINARY_NAME" -version 2>/dev/null | awk '{print $2}')
+    # fallback 到固定安装路径
+    elif [[ -x "$INSTALL_DIR/$BINARY_NAME" ]]; then
+        version=$("$INSTALL_DIR/$BINARY_NAME" -version 2>/dev/null | awk '{print $2}')
+    fi
+    
+    # 去掉 v 前缀
+    version=${version#v}
+    
+    if [[ -z "$version" ]]; then
         echo "0.0.0"
+    else
+        echo "$version"
     fi
 }
 
 # ========== 获取最新版本 ==========
 get_latest_version() {
     local url="https://api.github.com/repos/$REPO/releases/latest"
-    local version
+    local version=""
     
     if command -v curl &> /dev/null; then
         version=$(curl -fsSL "$url" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' | sed 's/^v//')
@@ -58,25 +69,26 @@ get_latest_version() {
         version=$(wget -qO- "$url" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' | sed 's/^v//')
     else
         log_error "需要 curl 或 wget"
-        exit 1
+        return 1
     fi
     
     if [[ -z "$version" ]]; then
         log_error "无法获取最新版本信息"
-        exit 1
+        return 1
     fi
     
     echo "$version"
 }
 
 # ========== 版本比较 ==========
-# 返回: 0=相等, 1=v1>v2, 2=v1<v2
+# 输出: equal, greater, less
 compare_versions() {
     local v1="$1"
     local v2="$2"
     
     if [[ "$v1" == "$v2" ]]; then
-        return 0
+        echo "equal"
+        return
     fi
     
     # 将版本号拆分为数组
@@ -88,45 +100,52 @@ compare_versions() {
         local n2=${V2[$i]:-0}
         
         if (( n1 > n2 )); then
-            return 1
+            echo "greater"
+            return
         elif (( n1 < n2 )); then
-            return 2
+            echo "less"
+            return
         fi
     done
     
-    return 0
+    echo "equal"
 }
 
 # ========== 下载二进制文件 ==========
+# 成功返回临时目录路径，失败返回空
 download_binary() {
     local version="$1"
     local arch="$2"
     local filename="chaoleme-linux-${arch}.tar.gz"
     local url="https://github.com/$REPO/releases/download/v${version}/${filename}"
-    local tmp_dir=$(mktemp -d)
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
     
     log_info "下载 $filename ..."
     
+    local download_ok=false
     if command -v curl &> /dev/null; then
-        curl -fsSL "$url" -o "$tmp_dir/$filename" || {
-            log_error "下载失败: $url"
-            rm -rf "$tmp_dir"
-            exit 1
-        }
-    else
-        wget -q "$url" -O "$tmp_dir/$filename" || {
-            log_error "下载失败: $url"
-            rm -rf "$tmp_dir"
-            exit 1
-        }
+        if curl -fsSL "$url" -o "$tmp_dir/$filename" 2>/dev/null; then
+            download_ok=true
+        fi
+    elif command -v wget &> /dev/null; then
+        if wget -q "$url" -O "$tmp_dir/$filename" 2>/dev/null; then
+            download_ok=true
+        fi
+    fi
+    
+    if [[ "$download_ok" != "true" ]]; then
+        log_error "下载失败: $url"
+        rm -rf "$tmp_dir"
+        return 1
     fi
     
     log_info "解压文件..."
-    tar -xzf "$tmp_dir/$filename" -C "$tmp_dir" || {
+    if ! tar -xzf "$tmp_dir/$filename" -C "$tmp_dir" 2>/dev/null; then
         log_error "解压失败"
         rm -rf "$tmp_dir"
-        exit 1
-    }
+        return 1
+    fi
     
     echo "$tmp_dir"
 }
@@ -138,8 +157,27 @@ backup_current() {
     if [[ -x "$INSTALL_DIR/$BINARY_NAME" ]]; then
         mkdir -p "$BACKUP_DIR"
         local backup_file="$BACKUP_DIR/${BINARY_NAME}-${current_version}-$(date +%Y%m%d%H%M%S)"
-        cp "$INSTALL_DIR/$BINARY_NAME" "$backup_file"
-        log_info "已备份当前版本到: $backup_file"
+        if cp "$INSTALL_DIR/$BINARY_NAME" "$backup_file" 2>/dev/null; then
+            log_info "已备份当前版本到: $backup_file"
+        else
+            log_warn "备份失败，继续更新..."
+        fi
+    fi
+}
+
+# ========== 停止服务 ==========
+stop_service() {
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        log_info "停止服务..."
+        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    fi
+}
+
+# ========== 启动服务 ==========
+start_service() {
+    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        log_info "启动服务..."
+        systemctl start "$SERVICE_NAME" 2>/dev/null || true
     fi
 }
 
@@ -152,25 +190,21 @@ install_binary() {
     if [[ ! -f "$binary_file" ]]; then
         log_error "找不到二进制文件: $binary_file"
         rm -rf "$tmp_dir"
-        exit 1
+        return 1
     fi
     
-    # 停止服务
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        log_info "停止服务..."
-        systemctl stop "$SERVICE_NAME"
-    fi
+    stop_service
     
     # 替换二进制
     log_info "安装新版本..."
-    cp "$binary_file" "$INSTALL_DIR/$BINARY_NAME"
+    if ! cp "$binary_file" "$INSTALL_DIR/$BINARY_NAME"; then
+        log_error "复制二进制文件失败"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
     
-    # 启动服务
-    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-        log_info "启动服务..."
-        systemctl start "$SERVICE_NAME"
-    fi
+    start_service
     
     # 清理临时文件
     rm -rf "$tmp_dir"
@@ -178,25 +212,25 @@ install_binary() {
 
 # ========== 回滚 ==========
 rollback() {
-    local backup_file=$(ls -t "$BACKUP_DIR"/${BINARY_NAME}-* 2>/dev/null | head -1)
+    local backup_file
+    backup_file=$(ls -t "$BACKUP_DIR"/${BINARY_NAME}-* 2>/dev/null | head -1)
     
-    if [[ -z "$backup_file" ]]; then
+    if [[ -z "$backup_file" || ! -f "$backup_file" ]]; then
         log_error "没有可用的备份文件"
-        exit 1
+        return 1
     fi
     
     log_info "回滚到: $backup_file"
     
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        systemctl stop "$SERVICE_NAME"
-    fi
+    stop_service
     
-    cp "$backup_file" "$INSTALL_DIR/$BINARY_NAME"
+    if ! cp "$backup_file" "$INSTALL_DIR/$BINARY_NAME"; then
+        log_error "回滚失败"
+        return 1
+    fi
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
     
-    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-        systemctl start "$SERVICE_NAME"
-    fi
+    start_service
     
     log_info "回滚完成"
 }
@@ -214,59 +248,80 @@ main() {
     
     # 回滚命令
     if [[ "$target_version" == "rollback" ]]; then
-        rollback
-        exit 0
+        if rollback; then
+            exit 0
+        else
+            exit 1
+        fi
     fi
     
     # 获取架构
-    local arch=$(detect_arch)
+    local arch
+    arch=$(detect_arch) || exit 1
     log_info "检测到架构: $arch"
     
     # 获取当前版本
-    local current_version=$(get_current_version)
+    local current_version
+    current_version=$(get_current_version)
     log_info "当前版本: $current_version"
     
     # 获取目标版本
     if [[ -z "$target_version" ]]; then
-        target_version=$(get_latest_version)
+        target_version=$(get_latest_version) || exit 1
     else
-        target_version=$(echo "$target_version" | sed 's/^v//')
+        target_version=${target_version#v}  # 去掉 v 前缀
     fi
     log_info "目标版本: $target_version"
     
     # 版本比较
-    compare_versions "$current_version" "$target_version"
-    local cmp_result=$?
+    local cmp_result
+    cmp_result=$(compare_versions "$current_version" "$target_version")
     
-    if [[ $cmp_result -eq 0 ]]; then
-        log_info "已是最新版本，无需更新"
-        exit 0
-    elif [[ $cmp_result -eq 1 ]]; then
-        log_warn "目标版本 ($target_version) 低于当前版本 ($current_version)"
-        read -p "确认降级? [y/N] " confirm
-        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-            log_info "取消操作"
+    case "$cmp_result" in
+        equal)
+            log_info "已是最新版本，无需更新"
             exit 0
-        fi
-    fi
+            ;;
+        greater)
+            log_warn "目标版本 ($target_version) 低于当前版本 ($current_version)"
+            read -p "确认降级? [y/N] " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                log_info "取消操作"
+                exit 0
+            fi
+            ;;
+        less)
+            log_info "准备升级: $current_version -> $target_version"
+            ;;
+    esac
     
     # 备份
     backup_current "$current_version"
     
     # 下载
-    local tmp_dir=$(download_binary "$target_version" "$arch")
+    local tmp_dir
+    tmp_dir=$(download_binary "$target_version" "$arch") || exit 1
     
     # 安装
-    install_binary "$tmp_dir" "$arch"
+    install_binary "$tmp_dir" "$arch" || exit 1
+    
+    # 等待一下让服务启动
+    sleep 1
     
     # 验证
-    local new_version=$(get_current_version)
-    if [[ "$new_version" == "$target_version" ]]; then
-        log_info "✅ 更新成功: $current_version -> $new_version"
+    local new_version
+    new_version=$(get_current_version)
+    # 比较时统一去掉 v 前缀
+    if [[ "${new_version#v}" == "${target_version#v}" ]]; then
+        log_info "✅ 更新成功: $current_version -> ${new_version#v}"
     else
         log_error "版本验证失败，期望 $target_version，实际 $new_version"
         log_warn "尝试回滚..."
-        rollback
+        if rollback; then
+            log_info "回滚成功"
+        else
+            log_error "回滚失败，请手动处理"
+        fi
         exit 1
     fi
 }
