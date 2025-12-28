@@ -625,9 +625,9 @@ func (a *Analyzer) describeBaselineStatus(deviation float64, status string) stri
 
 // calculateBaselineDeviation 计算与历史基线的偏离度
 func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, string) {
-	// 查询过去 7 天的历史数据作为基线
+	// 查询过去 14 天的历史数据作为基线（更长的窗口使基线更稳定）
 	baselineEnd := stats.StartTime
-	baselineStart := baselineEnd.AddDate(0, 0, -7)
+	baselineStart := baselineEnd.AddDate(0, 0, -14)
 
 	// 获取基线期间的各项指标
 	baselineSteal, _ := a.store.Query(storage.MetricTypeCPUSteal, baselineStart, baselineEnd)
@@ -639,34 +639,47 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, stri
 		return 0, "stable"
 	}
 
+	// 最小基准值阈值，避免极小值作为分母导致偏离度被过度放大
+	const (
+		minStealBaseline = 0.5 // CPU Steal 最小基准：0.5%
+		minIOBaseline    = 5.0 // I/O 延迟最小基准：5ms
+		minLoadBaseline  = 0.1 // CPU Load 最小基准：0.1
+	)
+
 	var deviations []float64
 	var totalDeviation float64
 
 	// 计算 CPU Steal 偏离
 	if len(baselineSteal) > 0 {
 		baselineStealAvg := avg(extractValues(baselineSteal))
-		if baselineStealAvg > 0 {
-			stealDeviation := (stats.CPUStealAvg - baselineStealAvg) / baselineStealAvg * 100
-			deviations = append(deviations, stealDeviation)
+		// 使用最小基准值，避免分母过小导致放大
+		if baselineStealAvg < minStealBaseline {
+			baselineStealAvg = minStealBaseline
 		}
+		stealDeviation := (stats.CPUStealAvg - baselineStealAvg) / baselineStealAvg * 100
+		deviations = append(deviations, stealDeviation)
 	}
 
 	// 计算 I/O 延迟偏离
 	if len(baselineIO) > 0 {
 		baselineIOAvg := avg(extractValues(baselineIO))
-		if baselineIOAvg > 0 {
-			ioDeviation := (stats.IOLatencyAvg - baselineIOAvg) / baselineIOAvg * 100
-			deviations = append(deviations, ioDeviation)
+		// 使用最小基准值，避免分母过小导致放大
+		if baselineIOAvg < minIOBaseline {
+			baselineIOAvg = minIOBaseline
 		}
+		ioDeviation := (stats.IOLatencyAvg - baselineIOAvg) / baselineIOAvg * 100
+		deviations = append(deviations, ioDeviation)
 	}
 
 	// 计算 CPU Load 偏离
 	if len(baselineLoad) > 0 {
 		baselineLoadAvg := avg(extractValues(baselineLoad))
-		if baselineLoadAvg > 0 {
-			loadDeviation := (stats.CPULoadAvg - baselineLoadAvg) / baselineLoadAvg * 100
-			deviations = append(deviations, loadDeviation)
+		// 使用最小基准值，避免分母过小导致放大
+		if baselineLoadAvg < minLoadBaseline {
+			baselineLoadAvg = minLoadBaseline
 		}
+		loadDeviation := (stats.CPULoadAvg - baselineLoadAvg) / baselineLoadAvg * 100
+		deviations = append(deviations, loadDeviation)
 	}
 
 	// 计算平均偏离度

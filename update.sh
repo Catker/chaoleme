@@ -1,9 +1,10 @@
 #!/bin/bash
 # chaoleme 自动更新脚本
-# 用法: ./update.sh [版本号]
-# 示例: ./update.sh         # 更新到最新版本
-#       ./update.sh v1.2.0  # 更新到指定版本
-#       ./update.sh rollback # 回滚到上一版本
+# 用法: ./update.sh [选项] [版本号]
+# 示例: ./update.sh           # 更新到最新版本
+#       ./update.sh v1.2.0    # 更新到指定版本
+#       ./update.sh --force   # 强制重新安装当前版本
+#       ./update.sh rollback  # 回滚到上一版本
 # ========== 配置 ==========
 REPO="Catker/chaoleme"
 INSTALL_DIR="/opt/chaoleme/bin"
@@ -83,8 +84,9 @@ get_latest_version() {
 # ========== 版本比较 ==========
 # 输出: equal, greater, less
 compare_versions() {
-    local v1="$1"
-    local v2="$2"
+    # 先去掉 v 前缀
+    local v1="${1#v}"
+    local v2="${2#v}"
     
     if [[ "$v1" == "$v2" ]]; then
         echo "equal"
@@ -255,6 +257,13 @@ main() {
         fi
     fi
     
+    # 强制更新标志
+    local force_update=false
+    if [[ "$target_version" == "--force" || "$target_version" == "-f" ]]; then
+        force_update=true
+        target_version=""
+    fi
+    
     # 获取架构
     local arch
     arch=$(detect_arch) || exit 1
@@ -273,27 +282,31 @@ main() {
     fi
     log_info "目标版本: $target_version"
     
-    # 版本比较
-    local cmp_result
-    cmp_result=$(compare_versions "$current_version" "$target_version")
-    
-    case "$cmp_result" in
-        equal)
-            log_info "已是最新版本，无需更新"
-            exit 0
-            ;;
-        greater)
-            log_warn "目标版本 ($target_version) 低于当前版本 ($current_version)"
-            read -p "确认降级? [y/N] " confirm
-            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-                log_info "取消操作"
+    # 版本比较（强制更新时跳过）
+    if [[ "$force_update" == "true" ]]; then
+        log_info "强制更新: $current_version -> $target_version"
+    else
+        local cmp_result
+        cmp_result=$(compare_versions "$current_version" "$target_version")
+        
+        case "$cmp_result" in
+            equal)
+                log_info "已是最新版本，无需更新"
                 exit 0
-            fi
-            ;;
-        less)
-            log_info "准备升级: $current_version -> $target_version"
-            ;;
-    esac
+                ;;
+            greater)
+                log_warn "目标版本 ($target_version) 低于当前版本 ($current_version)"
+                read -p "确认降级? [y/N] " confirm
+                if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                    log_info "取消操作"
+                    exit 0
+                fi
+                ;;
+            less)
+                log_info "准备升级: $current_version -> $target_version"
+                ;;
+        esac
+    fi
     
     # 备份
     backup_current "$current_version"
