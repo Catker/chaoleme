@@ -341,6 +341,21 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 			} else {
 				log.Printf("[定时任务] I/O 延迟测试失败: %v", err)
 			}
+			// 随机 IO 测试
+			if result, err := disk.TestRandomIO(); err == nil {
+				store.Save(&storage.Metric{
+					Timestamp: time.Now(),
+					Type:      storage.MetricTypeRandomIO,
+					Value:     result.RandomWriteLatencyMs,
+					Extra: map[string]interface{}{
+						"write_latency_ms": result.RandomWriteLatencyMs,
+						"read_latency_ms":  result.RandomReadLatencyMs,
+					},
+				})
+				log.Printf("Random I/O: Write=%.2fms, Read=%.2fms", result.RandomWriteLatencyMs, result.RandomReadLatencyMs)
+			} else {
+				log.Printf("[定时任务] 随机 I/O 测试失败: %v", err)
+			}
 			// 同时采集内存
 			if stats, err := mem.Collect(); err == nil {
 				store.Save(&storage.Metric{
