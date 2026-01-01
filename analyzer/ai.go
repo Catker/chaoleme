@@ -75,15 +75,26 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 		storageType = string(stats.StorageType)
 	}
 
+	// 格式化峰值时间（只显示时分）
+	stealPeakTime := "N/A"
+	if !stats.CPUStealMaxTime.IsZero() {
+		stealPeakTime = stats.CPUStealMaxTime.Format("15:04")
+	}
+	iowaitPeakTime := "N/A"
+	if !stats.CPUIoWaitMaxTime.IsZero() {
+		iowaitPeakTime = stats.CPUIoWaitMaxTime.Format("15:04")
+	}
+
 	prompt := fmt.Sprintf(`你是一个 VPS 性能分析专家。请根据以下 %s 监控数据，评估该 VPS 是否存在超售问题，并给出简洁建议。
 
 ## 数据摘要
-- CPU Steal Time: 平均 %.2f%%，最大 %.2f%%，P95 %.2f%%
+- CPU Steal Time: 平均 %.2f%%，P95 %.2f%%，峰值 %.2f%% @ %s
+- CPU IOWait: 平均 %.2f%%，P95 %.2f%%，峰值时间 %s
 - CPU 基准测试: 平均耗时 %.2fms，变异系数 %.3f
 - CPU Load (归一化): 平均 %.2f，最大 %.2f
 - I/O 顺序写延迟: 平均 %.2fms，P95 %.2fms，P99 %.2fms
-- I/O 随机延迟: 写 %.2fms，读 %.2fms
-- 磁盘繁忙度: %.1f%%
+- I/O 随机延迟: 写 %.2fms，读 %.2fms，P95 %.2fms
+- 磁盘繁忙度: 平均 %.1f%%，P95 %.1f%%
 - 内存可用率: %.1f%%
 - 存储类型: %s
 - 基线偏离: %.1f%% (%s)
@@ -94,12 +105,13 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 2. 最值得关注的 1-2 个问题
 3. 一条建议`,
 		periodDesc,
-		stats.CPUStealAvg, stats.CPUStealMax, stats.CPUStealP95,
+		stats.CPUStealAvg, stats.CPUStealP95, stats.CPUStealMax, stealPeakTime,
+		stats.CPUIoWaitAvg, stats.CPUIoWaitP95, iowaitPeakTime,
 		stats.CPUBenchAvg, stats.CPUBenchCV,
 		stats.CPULoadAvg, stats.CPULoadMax,
 		stats.IOLatencyAvg, stats.IOLatencyP95, stats.IOLatencyP99,
-		stats.RandomIOWriteAvg, stats.RandomIOReadAvg,
-		stats.DiskBusyPercent,
+		stats.RandomIOWriteAvg, stats.RandomIOReadAvg, stats.RandomIOP95,
+		stats.DiskBusyPercent, stats.DiskBusyP95,
 		stats.MemoryAvailablePercent,
 		storageType,
 		stats.BaselineDeviation, stats.BaselineStatus,
