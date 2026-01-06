@@ -618,6 +618,9 @@ func (a *Analyzer) describeBaselineStatus(deviation float64, status string) stri
 			return "🔴 明显下降"
 		}
 		return "⚠️ 轻微下降"
+	case "building":
+		// deviation 此时表示已有天数
+		return fmt.Sprintf("📊 基线建立中 (%d/7天)", int(deviation))
 	default:
 		return "✅ 稳定"
 	}
@@ -625,7 +628,7 @@ func (a *Analyzer) describeBaselineStatus(deviation float64, status string) stri
 
 // calculateBaselineDeviation 计算与历史基线的偏离度
 func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, string) {
-	// 查询过去 14 天的历史数据作为基线（更长的窗口使基线更稳定）
+	// 查询过去 14 天的历史数据作为基线
 	baselineEnd := stats.StartTime
 	baselineStart := baselineEnd.AddDate(0, 0, -14)
 
@@ -634,55 +637,64 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, stri
 	baselineIO, _ := a.store.Query(storage.MetricTypeIOLatency, baselineStart, baselineEnd)
 	baselineLoad, _ := a.store.Query(storage.MetricTypeCPULoad, baselineStart, baselineEnd)
 
-	// 如果没有足够的历史数据，返回稳定状态
-	if len(baselineSteal) < 10 && len(baselineIO) < 10 {
-		return 0, "stable"
+	// 计算历史数据覆盖的天数（通过检查数据点的时间跨度）
+	daysWithData := a.countDaysWithData(baselineSteal, baselineIO)
+
+	// 需要至少 7 天数据才开始正式计算偏离度
+	const minDaysRequired = 7
+	if daysWithData < minDaysRequired {
+		// 返回已有天数，用于显示进度
+		return float64(daysWithData), "building"
 	}
 
-	// 最小基准值阈值，避免极小值作为分母导致偏离度被过度放大
+	// 对于优质 VPS（指标极小），使用绝对偏差而非百分比
+	// 阈值：当基线值低于此值时，使用绝对偏差
 	const (
-		minStealBaseline = 0.5 // CPU Steal 最小基准：0.5%
-		minIOBaseline    = 5.0 // I/O 延迟最小基准：5ms
-		minLoadBaseline  = 0.1 // CPU Load 最小基准：0.1
+		absStealThreshold = 1.0  // Steal < 1% 时用绝对偏差
+		absIOThreshold    = 15.0 // I/O < 15ms 时用绝对偏差
+		absLoadThreshold  = 0.3  // Load < 0.3 时用绝对偏差
 	)
 
 	var deviations []float64
-	var totalDeviation float64
 
 	// 计算 CPU Steal 偏离
 	if len(baselineSteal) > 0 {
 		baselineStealAvg := avg(extractValues(baselineSteal))
-		// 使用最小基准值，避免分母过小导致放大
-		if baselineStealAvg < minStealBaseline {
-			baselineStealAvg = minStealBaseline
+		if baselineStealAvg < absStealThreshold && stats.CPUStealAvg < absStealThreshold {
+			// 两者都很小，使用绝对偏差（放大 10 倍使其有意义）
+			deviations = append(deviations, (stats.CPUStealAvg-baselineStealAvg)*10)
+		} else if baselineStealAvg > 0.01 {
+			// 使用百分比偏差
+			deviations = append(deviations, (stats.CPUStealAvg-baselineStealAvg)/baselineStealAvg*100)
 		}
-		stealDeviation := (stats.CPUStealAvg - baselineStealAvg) / baselineStealAvg * 100
-		deviations = append(deviations, stealDeviation)
 	}
 
 	// 计算 I/O 延迟偏离
 	if len(baselineIO) > 0 {
 		baselineIOAvg := avg(extractValues(baselineIO))
-		// 使用最小基准值，避免分母过小导致放大
-		if baselineIOAvg < minIOBaseline {
-			baselineIOAvg = minIOBaseline
+		if baselineIOAvg < absIOThreshold && stats.IOLatencyAvg < absIOThreshold {
+			// 两者都很小，使用绝对偏差（放大使其有意义）
+			deviations = append(deviations, (stats.IOLatencyAvg-baselineIOAvg)/absIOThreshold*100)
+		} else if baselineIOAvg > 0.1 {
+			// 使用百分比偏差
+			deviations = append(deviations, (stats.IOLatencyAvg-baselineIOAvg)/baselineIOAvg*100)
 		}
-		ioDeviation := (stats.IOLatencyAvg - baselineIOAvg) / baselineIOAvg * 100
-		deviations = append(deviations, ioDeviation)
 	}
 
 	// 计算 CPU Load 偏离
 	if len(baselineLoad) > 0 {
 		baselineLoadAvg := avg(extractValues(baselineLoad))
-		// 使用最小基准值，避免分母过小导致放大
-		if baselineLoadAvg < minLoadBaseline {
-			baselineLoadAvg = minLoadBaseline
+		if baselineLoadAvg < absLoadThreshold && stats.CPULoadAvg < absLoadThreshold {
+			// 两者都很小，使用绝对偏差
+			deviations = append(deviations, (stats.CPULoadAvg-baselineLoadAvg)/absLoadThreshold*100)
+		} else if baselineLoadAvg > 0.01 {
+			// 使用百分比偏差
+			deviations = append(deviations, (stats.CPULoadAvg-baselineLoadAvg)/baselineLoadAvg*100)
 		}
-		loadDeviation := (stats.CPULoadAvg - baselineLoadAvg) / baselineLoadAvg * 100
-		deviations = append(deviations, loadDeviation)
 	}
 
 	// 计算平均偏离度
+	var totalDeviation float64
 	if len(deviations) > 0 {
 		for _, d := range deviations {
 			totalDeviation += d
@@ -690,11 +702,11 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, stri
 		totalDeviation /= float64(len(deviations))
 	}
 
-	// 确定状态
+	// 确定状态（阈值从 10 调整为 15，减少误报）
 	var status string
-	if totalDeviation > 10 {
+	if totalDeviation > 15 {
 		status = "degrading"
-	} else if totalDeviation < -10 {
+	} else if totalDeviation < -15 {
 		status = "improving"
 	} else {
 		status = "stable"
@@ -706,6 +718,22 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, stri
 	}
 
 	return totalDeviation, status
+}
+
+// countDaysWithData 统计有数据的天数
+func (a *Analyzer) countDaysWithData(stealMetrics, ioMetrics []*storage.Metric) int {
+	daysSet := make(map[string]bool)
+
+	for _, m := range stealMetrics {
+		dayKey := m.Timestamp.Format("2006-01-02")
+		daysSet[dayKey] = true
+	}
+	for _, m := range ioMetrics {
+		dayKey := m.Timestamp.Format("2006-01-02")
+		daysSet[dayKey] = true
+	}
+
+	return len(daysSet)
 }
 
 // 辅助函数

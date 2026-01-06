@@ -1,7 +1,6 @@
 # 二进制文件
-vps-detector
-vps-detector-*
-
+chaoleme-linux-amd64
+chaoleme-linux-*
 # 测试数据
 *.db
 data.db
@@ -17,4 +16,3 @@ data.db
 
 # 配置文件（包含敏感信息）
 config.yaml
-.ace-tool/
