@@ -72,7 +72,8 @@ report:
 
 # 采集配置
 collect:
-  cpu_steal_interval: "5m"   # CPU 采集间隔
+  cpu_steal_interval: "5m"   # CPU Steal 采集间隔
+  cpu_bench_interval: "30m"  # CPU 基准测试间隔
   io_test_interval: "15m"    # I/O 延迟测试间隔
   io_test_size_mb: 4         # I/O 测试文件大小
 
@@ -82,6 +83,9 @@ ai:
   api_url: "https://api.openai.com/v1/chat/completions"
   api_key: "YOUR_API_KEY"
   model: "gpt-4o-mini"
+  daily: true    # 日报启用 AI 评价
+  weekly: true   # 周报启用 AI 评价
+  monthly: true  # 月报启用 AI 评价
 ```
 
 ## 🚀 使用
@@ -101,6 +105,29 @@ chaoleme --report monthly
 
 # 仅采集一次数据
 chaoleme --collect-once
+```
+
+### 自动更新
+
+```bash
+# 更新到最新版本
+sudo ./update.sh
+
+# 更新到指定版本
+sudo ./update.sh v1.2.0
+
+# 强制重新安装当前版本
+sudo ./update.sh --force
+
+# 回滚到上一版本
+sudo ./update.sh rollback
+```
+
+### 卸载
+
+```bash
+# 完全卸载 chaoleme（包括配置和数据）
+sudo ./uninstall.sh
 ```
 
 ## 📊 评分规则
