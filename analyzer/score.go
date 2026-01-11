@@ -91,7 +91,8 @@ type PeriodStats struct {
 
 	// 基线对比
 	BaselineDeviation float64 // 基线偏离度 (0-100，0 表示无偏离)
-	BaselineStatus    string  // "stable" / "degrading" / "improving"
+	BaselineStatus    string  // "stable" / "degrading" / "improving" / "building"
+	BaselineMinDays   int     // 根据报告类型动态设置的最小天数要求
 
 	// 存储类型
 	StorageType collector.StorageType
@@ -249,7 +250,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算基线偏离
-	stats.BaselineDeviation, stats.BaselineStatus = a.calculateBaselineDeviation(stats, period)
+	stats.BaselineDeviation, stats.BaselineStatus, stats.BaselineMinDays = a.calculateBaselineDeviation(stats, period)
 
 	// 计算综合评分
 	a.calculateScore(stats)
@@ -312,7 +313,7 @@ func (a *Analyzer) calculateScore(stats *PeriodStats) {
 	// 9. 基线偏离评分 (5%)
 	baselineScore := a.scoreBaselineDeviation(stats.BaselineDeviation)
 	totalScore += baselineScore * WeightBaseline
-	stats.RiskDetails["baseline"] = a.describeBaselineStatus(stats.BaselineDeviation, stats.BaselineStatus)
+	stats.RiskDetails["baseline"] = a.describeBaselineStatus(stats.BaselineDeviation, stats.BaselineStatus, stats.BaselineMinDays)
 
 	stats.TotalScore = totalScore
 
@@ -604,9 +605,12 @@ func (a *Analyzer) scoreBaselineDeviation(deviation float64) float64 {
 }
 
 // describeBaselineStatus 描述基线状态
-func (a *Analyzer) describeBaselineStatus(deviation float64, status string) string {
+func (a *Analyzer) describeBaselineStatus(deviation float64, status string, minDays int) string {
 	if status == "" {
 		status = "stable"
+	}
+	if minDays == 0 {
+		minDays = 7 // 默认值
 	}
 	switch status {
 	case "stable":
@@ -620,7 +624,7 @@ func (a *Analyzer) describeBaselineStatus(deviation float64, status string) stri
 		return "⚠️ 轻微下降"
 	case "building":
 		// deviation 此时表示已有天数
-		return fmt.Sprintf("📊 基线建立中 (%d/7天)", int(deviation))
+		return fmt.Sprintf("📊 基线建立中 (%d/%d天)", int(deviation), minDays)
 	default:
 		return "✅ 稳定"
 	}
@@ -628,7 +632,7 @@ func (a *Analyzer) describeBaselineStatus(deviation float64, status string) stri
 
 // calculateBaselineDeviation 计算与历史基线的偏离度
 // period: daily/weekly/monthly，用于动态调整基线期长度
-func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats, period string) (float64, string) {
+func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats, period string) (float64, string, int) {
 	// 根据报告类型确定基线期长度和最小数据要求
 	baselineDays := 14
 	minDaysRequired := 3
@@ -654,7 +658,7 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats, period string)
 
 	if daysWithData < minDaysRequired {
 		// 返回已有天数，用于显示进度
-		return float64(daysWithData), "building"
+		return float64(daysWithData), "building", minDaysRequired
 	}
 
 	// 对于优质 VPS（指标极小），使用绝对偏差而非百分比
@@ -727,7 +731,7 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats, period string)
 		totalDeviation = -totalDeviation
 	}
 
-	return totalDeviation, status
+	return totalDeviation, status, minDaysRequired
 }
 
 // countDaysWithData 统计有数据的天数
