@@ -249,7 +249,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算基线偏离
-	stats.BaselineDeviation, stats.BaselineStatus = a.calculateBaselineDeviation(stats)
+	stats.BaselineDeviation, stats.BaselineStatus = a.calculateBaselineDeviation(stats, period)
 
 	// 计算综合评分
 	a.calculateScore(stats)
@@ -627,10 +627,22 @@ func (a *Analyzer) describeBaselineStatus(deviation float64, status string) stri
 }
 
 // calculateBaselineDeviation 计算与历史基线的偏离度
-func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, string) {
-	// 查询过去 14 天的历史数据作为基线
+// period: daily/weekly/monthly，用于动态调整基线期长度
+func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats, period string) (float64, string) {
+	// 根据报告类型确定基线期长度和最小数据要求
+	baselineDays := 14
+	minDaysRequired := 3
+	switch period {
+	case "weekly":
+		baselineDays = 28
+		minDaysRequired = 7
+	case "monthly":
+		baselineDays = 60
+		minDaysRequired = 14
+	}
+
 	baselineEnd := stats.StartTime
-	baselineStart := baselineEnd.AddDate(0, 0, -14)
+	baselineStart := baselineEnd.AddDate(0, 0, -baselineDays)
 
 	// 获取基线期间的各项指标
 	baselineSteal, _ := a.store.Query(storage.MetricTypeCPUSteal, baselineStart, baselineEnd)
@@ -640,8 +652,6 @@ func (a *Analyzer) calculateBaselineDeviation(stats *PeriodStats) (float64, stri
 	// 计算历史数据覆盖的天数（通过检查数据点的时间跨度）
 	daysWithData := a.countDaysWithData(baselineSteal, baselineIO)
 
-	// 需要至少 7 天数据才开始正式计算偏离度
-	const minDaysRequired = 7
 	if daysWithData < minDaysRequired {
 		// 返回已有天数，用于显示进度
 		return float64(daysWithData), "building"
