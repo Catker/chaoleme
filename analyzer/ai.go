@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/Catker/chaoleme/config"
@@ -14,38 +17,98 @@ import (
 
 // AIAnalyzer AI 分析器
 type AIAnalyzer struct {
-	client *http.Client
-	config *config.AIConfig
+	client     *http.Client
+	configPath string
+
+	mu              sync.RWMutex
+	config          config.AIConfig
+	lastSeenModTime time.Time
 }
 
 // NewAIAnalyzer 创建 AI 分析器
-func NewAIAnalyzer(cfg *config.AIConfig) *AIAnalyzer {
-	return &AIAnalyzer{
+func NewAIAnalyzer(cfg *config.AIConfig, configPath string) *AIAnalyzer {
+	analyzer := &AIAnalyzer{
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		config: cfg,
+		configPath: configPath,
 	}
+
+	if cfg != nil {
+		analyzer.config = *cfg
+	}
+
+	if configPath != "" {
+		if info, err := os.Stat(configPath); err == nil {
+			analyzer.lastSeenModTime = info.ModTime()
+		}
+	}
+
+	return analyzer
+}
+
+// currentConfig 获取当前生效的 AI 配置快照
+func (a *AIAnalyzer) currentConfig() config.AIConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	return a.config
+}
+
+// reloadConfigIfChanged 在生成 AI 分析前按需热重载配置
+func (a *AIAnalyzer) reloadConfigIfChanged() {
+	if a.configPath == "" {
+		return
+	}
+
+	info, err := os.Stat(a.configPath)
+	if err != nil {
+		log.Printf("检查 AI 配置文件变更失败，继续使用旧配置: %v", err)
+		return
+	}
+
+	a.mu.Lock()
+	if !info.ModTime().After(a.lastSeenModTime) {
+		a.mu.Unlock()
+		return
+	}
+	a.lastSeenModTime = info.ModTime()
+	a.mu.Unlock()
+
+	cfg, err := config.LoadAI(a.configPath)
+	if err != nil {
+		log.Printf("AI 配置热重载失败，继续使用旧配置: %v", err)
+		return
+	}
+
+	a.mu.Lock()
+	a.config = *cfg
+	a.mu.Unlock()
+
+	log.Printf("AI 配置已热重载: enabled=%t, model=%s", cfg.Enabled, cfg.Model)
 }
 
 // Analyze 使用 AI 分析统计数据
 func (a *AIAnalyzer) Analyze(stats *PeriodStats, reportType string) (string, error) {
-	if !a.config.Enabled {
+	a.reloadConfigIfChanged()
+	cfg := a.currentConfig()
+
+	if !cfg.Enabled {
 		return "", nil
 	}
 
 	// 检查是否启用该类型的 AI 评价
 	switch reportType {
 	case "daily":
-		if !a.config.Daily {
+		if !cfg.Daily {
 			return "", nil
 		}
 	case "weekly":
-		if !a.config.Weekly {
+		if !cfg.Weekly {
 			return "", nil
 		}
 	case "monthly":
-		if !a.config.Monthly {
+		if !cfg.Monthly {
 			return "", nil
 		}
 	}
@@ -55,7 +118,7 @@ func (a *AIAnalyzer) Analyze(stats *PeriodStats, reportType string) (string, err
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return a.callAPI(ctx, prompt)
+	return a.callAPI(ctx, prompt, cfg)
 }
 
 // buildPrompt 构建 AI prompt
@@ -132,6 +195,7 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
 }
 
 type chatMessage struct {
@@ -151,12 +215,13 @@ type chatResponse struct {
 }
 
 // callAPI 调用 OpenAI 兼容 API
-func (a *AIAnalyzer) callAPI(ctx context.Context, prompt string) (string, error) {
+func (a *AIAnalyzer) callAPI(ctx context.Context, prompt string, cfg config.AIConfig) (string, error) {
 	reqBody := chatRequest{
-		Model: a.config.Model,
+		Model: cfg.Model,
 		Messages: []chatMessage{
 			{Role: "user", Content: prompt},
 		},
+		Stream: false,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -164,13 +229,13 @@ func (a *AIAnalyzer) callAPI(ctx context.Context, prompt string) (string, error)
 		return "", fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", a.config.APIURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.APIURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("创建请求失败: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.config.APIKey)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 
 	resp, err := a.client.Do(req)
 	if err != nil {

@@ -157,6 +157,7 @@ collect:
   io_test_interval: "15m"
   io_test_size_mb: 4
 
+# AI 配置支持热重载：修改后会在下一次生成报告时自动生效
 ai:
   enabled: false
   api_url: "https://api.openai.com/v1/chat/completions"

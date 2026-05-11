@@ -59,6 +59,10 @@ type AIConfig struct {
 	Monthly bool   `yaml:"monthly"`
 }
 
+type aiOnlyConfig struct {
+	AI AIConfig `yaml:"ai"`
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
@@ -119,6 +123,27 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// LoadAI 从文件加载 AI 配置
+func LoadAI(path string) (*AIConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取 AI 配置文件失败: %w", err)
+	}
+
+	cfg := aiOnlyConfig{
+		AI: DefaultConfig().AI,
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("解析 AI 配置失败: %w", err)
+	}
+
+	if err := validateAIConfig(&cfg.AI); err != nil {
+		return nil, fmt.Errorf("AI 配置验证失败: %w", err)
+	}
+
+	return &cfg.AI, nil
+}
+
 // Validate 验证配置有效性
 func (c *Config) Validate() error {
 	if c.Telegram.BotToken == "" || c.Telegram.BotToken == "YOUR_BOT_TOKEN" {
@@ -147,9 +172,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// 验证 AI 配置
-	if c.AI.Enabled {
-		if c.AI.APIKey == "" || c.AI.APIKey == "YOUR_API_KEY" {
+	if err := validateAIConfig(&c.AI); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateAIConfig(ai *AIConfig) error {
+	if ai.Enabled {
+		if ai.APIKey == "" || ai.APIKey == "YOUR_API_KEY" {
 			return fmt.Errorf("ai.api_key 未配置")
 		}
 	}

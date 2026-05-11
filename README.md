@@ -77,7 +77,7 @@ collect:
   io_test_interval: "15m"    # I/O 延迟测试间隔
   io_test_size_mb: 4         # I/O 测试文件大小
 
-# AI 分析（可选）
+# AI 分析（可选，修改后会在下一次生成报告时自动加载最新配置）
 ai:
   enabled: false
   api_url: "https://api.openai.com/v1/chat/completions"

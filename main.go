@@ -26,7 +26,7 @@ var (
 	version      = flag.Bool("version", false, "显示版本信息")
 )
 
-var Version = "1.1.0"
+var Version = "1.2.0"
 
 func main() {
 	flag.Parse()
@@ -72,7 +72,7 @@ func main() {
 
 	// 初始化分析器
 	scoreAnalyzer := analyzer.NewAnalyzer(store)
-	aiAnalyzer := analyzer.NewAIAnalyzer(&cfg.AI)
+	aiAnalyzer := analyzer.NewAIAnalyzer(&cfg.AI, *configPath)
 
 	// 仅采集一次
 	if *collectOnce {
