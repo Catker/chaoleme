@@ -53,6 +53,12 @@ detect_arch() {
         aarch64)
             ARCH="arm64"
             ;;
+        armv7l)
+            ARCH="arm"
+            ;;
+        i686|i386)
+            ARCH="386"
+            ;;
         *)
             echo -e "${RED}不支持的系统架构: $ARCH${NC}"
             exit 1
@@ -80,8 +86,16 @@ find_binary() {
         echo "  - chaoleme-linux-$ARCH (从 GitHub Release 下载)"
         echo "  - chaoleme (本地编译)"
         echo ""
-        echo "下载地址: https://github.com/lvvdev/chaoleme/releases"
+        echo "下载地址: https://github.com/Catker/chaoleme/releases"
         exit 1
+    fi
+}
+
+ensure_service_user() {
+    local home_dir="${1:-$DEFAULT_INSTALL_DIR}"
+    if ! id -u "$SERVICE_NAME" >/dev/null 2>&1; then
+        echo -e "${YELLOW}创建系统用户: $SERVICE_NAME${NC}"
+        useradd --system --home "$home_dir" --shell /usr/sbin/nologin "$SERVICE_NAME"
     fi
 }
 
@@ -95,6 +109,7 @@ do_install() {
     check_root
     detect_arch
     find_binary
+    ensure_service_user "$INSTALL_DIR"
     
     # 定义路径
     local BIN_DIR="$INSTALL_DIR/bin"
@@ -124,6 +139,7 @@ do_install() {
     echo -e "${YELLOW}安装二进制文件...${NC}"
     cp "$BINARY_SOURCE" "$BIN_DIR/$BINARY_NAME"
     chmod +x "$BIN_DIR/$BINARY_NAME"
+    chown root:root "$BIN_DIR/$BINARY_NAME"
     
     # 创建软链接到 /usr/local/bin
     echo -e "${YELLOW}创建命令链接...${NC}"
@@ -149,7 +165,7 @@ report:
 
 storage:
   db_path: "${DATA_DIR}/data.db"
-  retention_days: 30
+  retention_days: 90
 
 collect:
   cpu_steal_interval: "5m"
@@ -176,6 +192,7 @@ EOF
     
     # 保存安装路径（用于卸载）
     echo "$INSTALL_DIR" > /etc/chaoleme_install_path
+    chown -R "$SERVICE_NAME:$SERVICE_NAME" "$CONFIG_DIR" "$DATA_DIR"
     
     # 创建 systemd 服务
     echo -e "${YELLOW}创建 systemd 服务...${NC}"
@@ -186,12 +203,19 @@ After=network.target
 
 [Service]
 Type=simple
+User=$SERVICE_NAME
+Group=$SERVICE_NAME
 ExecStart=$BIN_DIR/$BINARY_NAME --config $CONFIG_DIR/config.yaml
 WorkingDirectory=$INSTALL_DIR
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

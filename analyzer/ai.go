@@ -9,11 +9,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Catker/chaoleme/config"
 )
+
+const maxAIResponseBytes = 1 << 20
 
 // AIAnalyzer AI 分析器
 type AIAnalyzer struct {
@@ -72,7 +75,6 @@ func (a *AIAnalyzer) reloadConfigIfChanged() {
 		a.mu.Unlock()
 		return
 	}
-	a.lastSeenModTime = info.ModTime()
 	a.mu.Unlock()
 
 	cfg, err := config.LoadAI(a.configPath)
@@ -83,6 +85,7 @@ func (a *AIAnalyzer) reloadConfigIfChanged() {
 
 	a.mu.Lock()
 	a.config = *cfg
+	a.lastSeenModTime = info.ModTime()
 	a.mu.Unlock()
 
 	log.Printf("AI 配置已热重载: enabled=%t, model=%s", cfg.Enabled, cfg.Model)
@@ -137,6 +140,10 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 	if stats.StorageType != "" {
 		storageType = string(stats.StorageType)
 	}
+	wordLimit := 150
+	if reportType == "weekly" || reportType == "monthly" {
+		wordLimit = 260
+	}
 
 	// 格式化峰值时间（只显示时分）
 	stealPeakTime := "N/A"
@@ -148,44 +155,64 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 		iowaitPeakTime = stats.CPUIoWaitMaxTime.Format("15:04")
 	}
 
-	prompt := fmt.Sprintf(`你是一个 VPS 性能分析专家。请根据以下 %s 监控数据，评估该 VPS 是否存在超售问题，并给出简洁建议。
+	prompt := fmt.Sprintf(`你是一个 VPS 性能分析专家。请根据以下 %s 监控数据，基于证据等级评估 VPS 是否存在超售或资源争抢，并给出简洁建议。不要把缺失数据解释为正常。
+
+## 规则判定
+- 超售判定: %s
+- 证据等级: %s
+- 缺失指标: %s
+- 查询错误: %s
+
+## 运行环境
+- 虚拟化类型: %s
+- 检测到 Hypervisor: %t
+- 容器环境: %t
+- Steal 可直接解释: %t
 
 ## 数据摘要
 - CPU Steal Time: 平均 %.2f%%，P95 %.2f%%，峰值 %.2f%% @ %s
 - CPU IOWait: 平均 %.2f%%，P95 %.2f%%，峰值时间 %s
 - CPU 基准测试: 平均耗时 %.2fms，变异系数 %.3f
 - CPU Load (归一化): 平均 %.2f，最大 %.2f
+- Linux PSI: CPU some 平均 %.2f%% / P95 %.2f%%，IO some 平均 %.2f%% / P95 %.2f%%
+- cgroup CPU 限额节流: 平均 %.2f%% / P95 %.2f%%
 - I/O 顺序写延迟: 平均 %.2fms，P95 %.2fms，P99 %.2fms
-- I/O 随机延迟: 写 %.2fms，读 %.2fms，P95 %.2fms
+- I/O 随机延迟: 写 %.2fms，读 %.2fms，P95 %.2fms，O_DIRECT 有效样本 %d/%d
 - 磁盘繁忙度: 平均 %.1f%%，P95 %.1f%%
 - 内存可用率: %.1f%%
 - 存储类型: %s
-- 基线偏离: %.1f%% (%s)
-- 规则评分: %.0f/100
+- 历史趋势: 偏离 %.1f%%，状态 %s，质量 %s，说明 %s
+- 健康评分: %.0f/100
 
-请用中文回复，限制在 150 字以内。格式：
-1. 一句话总结超售风险
+请用中文回复，限制在 %d 字以内。格式：
+1. 一句话总结证据判定
 2. 最值得关注的 1-2 个问题
 3. 一条建议`,
 		periodDesc,
+		stats.OversellVerdict.Label(), stats.EvidenceLevel.Label(),
+		strings.Join(stats.MissingMetrics, ", "), strings.Join(stats.QueryErrors, " | "),
+		stats.VirtualizationType, stats.HypervisorDetected, stats.ContainerDetected, stats.StealDirectlyInterpretable,
 		stats.CPUStealAvg, stats.CPUStealP95, stats.CPUStealMax, stealPeakTime,
 		stats.CPUIoWaitAvg, stats.CPUIoWaitP95, iowaitPeakTime,
 		stats.CPUBenchAvg, stats.CPUBenchCV,
 		stats.CPULoadAvg, stats.CPULoadMax,
+		stats.CPUPressureSomeAvg, stats.CPUPressureSomeP95, stats.IOPressureSomeAvg, stats.IOPressureSomeP95,
+		stats.CPUThrottleAvg, stats.CPUThrottleP95,
 		stats.IOLatencyAvg, stats.IOLatencyP95, stats.IOLatencyP99,
-		stats.RandomIOWriteAvg, stats.RandomIOReadAvg, stats.RandomIOP95,
+		stats.RandomIOWriteAvg, stats.RandomIOReadAvg, stats.RandomIOP95, stats.RandomIODirectIOSamples, stats.RandomIOSamples,
 		stats.DiskBusyPercent, stats.DiskBusyP95,
 		stats.MemoryAvailablePercent,
 		storageType,
-		stats.BaselineDeviation, stats.BaselineStatus,
+		stats.BaselineDeviation, stats.BaselineStatus, stats.BaselineQuality.Label(), stats.BaselineReason,
 		stats.TotalScore,
+		wordLimit,
 	)
 
 	// 周报/月报增加趋势分析提示
 	if reportType == "weekly" {
 		prompt += "\n\n请额外分析本周的性能趋势。"
 	} else if reportType == "monthly" {
-		prompt += "\n\n请额外分析长期趋势，并评估是否建议更换服务商。"
+		prompt += "\n\n请额外分析长期趋势，并说明是否需要迁移前继续观察或压测验证。"
 	}
 
 	return prompt
@@ -243,9 +270,16 @@ func (a *AIAnalyzer) callAPI(ctx context.Context, prompt string, cfg config.AICo
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %w", err)
+	}
+	if len(body) > maxAIResponseBytes {
+		return "", fmt.Errorf("API 响应过大，超过 %d 字节", maxAIResponseBytes)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("API HTTP 状态异常 (%d): %s", resp.StatusCode, string(body))
 	}
 
 	var chatResp chatResponse

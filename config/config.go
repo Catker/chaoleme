@@ -8,6 +8,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// 各报告的历史趋势周期要求：
+	// daily:   当前 1 天 + 前 14 天历史窗口 = 15 天
+	// weekly:  当前 7 天 + 前 28 天历史窗口 = 35 天
+	// monthly: 当前约 30 天 + 前 60 天历史窗口 = 90 天
+	minDailyRetentionDays   = 15
+	minWeeklyRetentionDays  = 35
+	minMonthlyRetentionDays = 90
+)
+
 // Config 主配置结构
 type Config struct {
 	Hostname string         `yaml:"hostname"` // 主机标识，用于多机器推送区分（可选，未填则自动获取系统主机名）
@@ -75,8 +85,8 @@ func DefaultConfig() *Config {
 			MonthlyDay: 1,
 		},
 		Storage: StorageConfig{
-			DBPath:        "/var/lib/chaoleme/data.db",
-			RetentionDays: 30,
+			DBPath:        "/opt/chaoleme/data/data.db",
+			RetentionDays: minMonthlyRetentionDays,
 		},
 		Collect: CollectConfig{
 			CPUStealInterval: "5m",
@@ -153,6 +163,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("telegram.chat_id 未配置")
 	}
 
+	if err := c.validateRetentionDays(); err != nil {
+		return err
+	}
+
 	// 验证时间间隔格式
 	intervals := map[string]string{
 		"cpu_steal_interval": c.Collect.CPUStealInterval,
@@ -176,6 +190,32 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	return nil
+}
+
+func (c *Config) validateRetentionDays() error {
+	requiredDays := 0
+	requiredReport := ""
+
+	if c.Report.Daily && minDailyRetentionDays > requiredDays {
+		requiredDays = minDailyRetentionDays
+		requiredReport = "daily"
+	}
+	if c.Report.Weekly && minWeeklyRetentionDays > requiredDays {
+		requiredDays = minWeeklyRetentionDays
+		requiredReport = "weekly"
+	}
+	if c.Report.Monthly && minMonthlyRetentionDays > requiredDays {
+		requiredDays = minMonthlyRetentionDays
+		requiredReport = "monthly"
+	}
+
+	if requiredDays == 0 {
+		return nil
+	}
+	if c.Storage.RetentionDays < requiredDays {
+		return fmt.Errorf("storage.retention_days=%d 不足以支撑 %s 报告历史趋势，至少需要 %d 天", c.Storage.RetentionDays, requiredReport, requiredDays)
+	}
 	return nil
 }
 

@@ -14,6 +14,11 @@ import (
 	"github.com/Catker/chaoleme/config"
 )
 
+const (
+	telegramSafeMessageLimit = 3900
+	telegramErrorBodyLimit   = 8192
+)
+
 // TelegramReporter Telegram 报告器
 type TelegramReporter struct {
 	botToken string
@@ -36,12 +41,12 @@ func NewTelegramReporter(cfg *config.TelegramConfig, hostname string) *TelegramR
 
 // SendReport 发送报告
 func (r *TelegramReporter) SendReport(stats *analyzer.PeriodStats, aiAnalysis string) error {
-	message := r.formatReport(stats, aiAnalysis)
+	message := r.FormatReport(stats, aiAnalysis)
 	return r.sendMessageWithRetry(message, 3)
 }
 
-// formatReport 格式化报告
-func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis string) string {
+// FormatReport 格式化报告，可用于 Telegram 发送或本地预览。
+func (r *TelegramReporter) FormatReport(stats *analyzer.PeriodStats, aiAnalysis string) string {
 	var buf bytes.Buffer
 
 	// 标题
@@ -61,10 +66,34 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("%s | 🖥️ %s\n", title, r.hostname))
 	buf.WriteString(fmt.Sprintf("📅 %s\n\n", stats.EndTime.Format("2006-01-02")))
 	buf.WriteString("━━━━━━━━━━━━━━━━━━\n")
+	buf.WriteString(fmt.Sprintf("🧭 超售判定: %s\n", stats.OversellVerdict.Label()))
+	buf.WriteString(fmt.Sprintf("🔎 证据等级: %s\n", stats.EvidenceLevel.Label()))
+	for _, item := range stats.EvidenceSummary {
+		buf.WriteString(fmt.Sprintf("   • %s\n", item))
+	}
+	if len(stats.MissingMetrics) > 0 {
+		buf.WriteString(fmt.Sprintf("   • 缺失指标: %s\n", strings.Join(stats.MissingMetrics, ", ")))
+	}
+	if len(stats.QueryErrors) > 0 {
+		buf.WriteString(fmt.Sprintf("   • 查询错误: %s\n", strings.Join(stats.QueryErrors, " | ")))
+	}
+	buf.WriteString("\n")
+
+	buf.WriteString("🧪 样本覆盖:\n")
+	buf.WriteString(fmt.Sprintf("   • CPU Steal/IOWait 样本: %d/%d\n", stats.CPUStealSamples, stats.CPUIoWaitSamples))
+	buf.WriteString(fmt.Sprintf("   • 核心覆盖: %.1f小时 / %.1f%%\n\n", stats.CoreSampleSpanHours, stats.CoreCoveragePercent))
+
+	if stats.HostContextSamples > 0 {
+		buf.WriteString("🧱 运行环境:\n")
+		buf.WriteString(fmt.Sprintf("   • 虚拟化类型: %s\n", stats.VirtualizationType))
+		buf.WriteString(fmt.Sprintf("   • Hypervisor: %t\n", stats.HypervisorDetected))
+		buf.WriteString(fmt.Sprintf("   • 容器环境: %t\n", stats.ContainerDetected))
+		buf.WriteString(fmt.Sprintf("   • Steal 可直接解释: %t\n\n", stats.StealDirectlyInterpretable))
+	}
 
 	// CPU Steal
 	cpuRisk := stats.RiskDetails["cpu_steal"]
-	buf.WriteString(fmt.Sprintf("🖥️ CPU 超售风险: %s\n", cpuRisk))
+	buf.WriteString(fmt.Sprintf("🖥️ CPU 争抢证据: %s\n", cpuRisk))
 	buf.WriteString(fmt.Sprintf("   • Steal Time 平均: %.2f%%\n", stats.CPUStealAvg))
 	buf.WriteString(fmt.Sprintf("   • Steal Time 峰值: %.2f%%\n", stats.CPUStealMax))
 	if !stats.CPUStealMaxTime.IsZero() {
@@ -97,6 +126,9 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("🎲 随机 I/O: %s\n", randomIORisk))
 	buf.WriteString(fmt.Sprintf("   • 写延迟: %.2fms\n", stats.RandomIOWriteAvg))
 	buf.WriteString(fmt.Sprintf("   • 读延迟: %.2fms\n", stats.RandomIOReadAvg))
+	if stats.RandomIOSamples > 0 {
+		buf.WriteString(fmt.Sprintf("   • O_DIRECT 有效样本: %d/%d\n", stats.RandomIODirectIOSamples, stats.RandomIOSamples))
+	}
 	buf.WriteString("\n")
 
 	// 磁盘繁忙度
@@ -116,34 +148,54 @@ func (r *TelegramReporter) formatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	loadRisk := stats.RiskDetails["cpu_load"]
 	buf.WriteString(fmt.Sprintf("📊 CPU 负载: %s\n", loadRisk))
 	buf.WriteString(fmt.Sprintf("   • Load1 (归一化): %.2f\n", stats.CPULoadAvg))
-	buf.WriteString(fmt.Sprintf("   • 峰值 (归一化): %.2f\n\n", stats.CPULoadMax))
+	buf.WriteString(fmt.Sprintf("   • 峰值 (归一化): %.2f\n", stats.CPULoadMax))
+	if stats.CPUPressureSamples > 0 {
+		buf.WriteString(fmt.Sprintf("   • CPU PSI some: 平均 %.2f%% / P95 %.2f%%\n", stats.CPUPressureSomeAvg, stats.CPUPressureSomeP95))
+	}
+	if stats.CPUThrottleSamples > 0 {
+		buf.WriteString(fmt.Sprintf("   • CPU 限额节流: 平均 %.2f%% / P95 %.2f%%\n", stats.CPUThrottleAvg, stats.CPUThrottleP95))
+	}
+	if stats.IOPressureSamples > 0 {
+		buf.WriteString(fmt.Sprintf("   • IO PSI some: 平均 %.2f%% / P95 %.2f%%\n", stats.IOPressureSomeAvg, stats.IOPressureSomeP95))
+	}
+	buf.WriteString("\n")
 
-	// Baseline
+	// 历史趋势
 	baselineRisk := stats.RiskDetails["baseline"]
-	buf.WriteString(fmt.Sprintf("📈 基线对比: %s\n", baselineRisk))
+	buf.WriteString(fmt.Sprintf("📈 历史趋势: %s\n", baselineRisk))
 	if stats.BaselineDeviation > 0 {
 		buf.WriteString(fmt.Sprintf("   • 偏离度: %.1f%%\n", stats.BaselineDeviation))
+	}
+	if stats.BaselineReason != "" {
+		buf.WriteString(fmt.Sprintf("   • 依据: %s\n", stats.BaselineReason))
+	}
+	for _, item := range stats.BaselineMetrics {
+		buf.WriteString(fmt.Sprintf("   • %s: 当前 %.2f / 历史中位 %.2f / 偏离 %.1f%% / %s\n",
+			item.Name, item.Current, item.BaselineMedian, item.DeviationPercent, item.Status))
 	}
 	buf.WriteString("\n")
 
 	buf.WriteString("━━━━━━━━━━━━━━━━━━\n")
 
-	// 综合评分
-	buf.WriteString(fmt.Sprintf("📈 综合评分: %.0f/100\n", stats.TotalScore))
+	// 健康评分只表示资源状态，不直接等同于超售结论。
+	buf.WriteString(fmt.Sprintf("📈 健康评分: %.0f/100\n", stats.TotalScore))
 
-	// 风险等级描述
 	var riskDesc string
 	switch stats.RiskLevel {
+	case analyzer.RiskLevelUnknown:
+		riskDesc = "⚪ 数据不足"
 	case analyzer.RiskLevelExcellent:
-		riskDesc = "✅ 优秀，无超售迹象"
+		riskDesc = "✅ 优秀"
 	case analyzer.RiskLevelGood:
-		riskDesc = "🟢 良好，轻微资源竞争"
+		riskDesc = "🟢 良好"
 	case analyzer.RiskLevelMedium:
-		riskDesc = "⚠️ 中等，存在超售可能"
+		riskDesc = "⚠️ 中等"
 	case analyzer.RiskLevelSevere:
-		riskDesc = "🔴 严重超售，建议更换"
+		riskDesc = "🔴 严重"
+	default:
+		riskDesc = "⚪ 数据不足"
 	}
-	buf.WriteString(fmt.Sprintf("📋 风险等级: %s\n", riskDesc))
+	buf.WriteString(fmt.Sprintf("📋 健康等级: %s\n", riskDesc))
 
 	// 时段分析摘要（仅周报/月报显示）
 	if (stats.Period == "weekly" || stats.Period == "monthly") && len(stats.HourlyBreakdown) > 0 {
@@ -180,6 +232,16 @@ func escapeHTML(text string) string {
 
 // sendMessageWithRetry 发送消息到 Telegram（带重试机制）
 func (r *TelegramReporter) sendMessageWithRetry(text string, maxRetries int) error {
+	chunks := splitTelegramMessage(escapeHTML(text), telegramSafeMessageLimit)
+	for i, chunk := range chunks {
+		if err := r.sendMessageChunkWithRetry(chunk, maxRetries); err != nil {
+			return fmt.Errorf("发送第 %d/%d 段失败: %w", i+1, len(chunks), err)
+		}
+	}
+	return nil
+}
+
+func (r *TelegramReporter) sendMessageChunkWithRetry(escapedText string, maxRetries int) error {
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		if i > 0 {
@@ -187,7 +249,7 @@ func (r *TelegramReporter) sendMessageWithRetry(text string, maxRetries int) err
 			wait := time.Duration(1<<uint(i-1)) * time.Second
 			time.Sleep(wait)
 		}
-		if err := r.sendMessage(text); err != nil {
+		if err := r.sendMessage(escapedText); err != nil {
 			lastErr = err
 			// 记录重试日志（内部不再 import log，通过返回错误传递）
 			continue
@@ -198,11 +260,8 @@ func (r *TelegramReporter) sendMessageWithRetry(text string, maxRetries int) err
 }
 
 // sendMessage 发送消息到 Telegram
-func (r *TelegramReporter) sendMessage(text string) error {
+func (r *TelegramReporter) sendMessage(escapedText string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", r.botToken)
-
-	// 转义 HTML 特殊字符
-	escapedText := escapeHTML(text)
 
 	payload := map[string]interface{}{
 		"chat_id":    r.chatID,
@@ -217,13 +276,13 @@ func (r *TelegramReporter) sendMessage(text string) error {
 
 	resp, err := r.client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("发送消息失败: %w", err)
+		return fmt.Errorf("发送消息失败: %s", r.sanitizeErrorText(err.Error()))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Telegram API 错误 (%d): %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, telegramErrorBodyLimit))
+		return fmt.Errorf("Telegram API 错误 (%d): %s", resp.StatusCode, r.sanitizeErrorText(string(body)))
 	}
 
 	return nil
@@ -231,7 +290,48 @@ func (r *TelegramReporter) sendMessage(text string) error {
 
 // TestConnection 测试 Telegram 连接
 func (r *TelegramReporter) TestConnection() error {
-	return r.sendMessage("✅ 超了么 (chaoleme) 已连接成功！")
+	return r.sendMessageWithRetry("✅ 超了么 (chaoleme) 已连接成功！", 1)
+}
+
+func (r *TelegramReporter) sanitizeErrorText(text string) string {
+	if r.botToken == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, r.botToken, "<telegram-bot-token>")
+}
+
+func splitTelegramMessage(text string, limit int) []string {
+	if limit <= 0 {
+		return []string{text}
+	}
+
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(runes) > 0 {
+		end := limit
+		if len(runes) < end {
+			end = len(runes)
+		} else {
+			for end > 0 && runes[end-1] != '\n' {
+				end--
+			}
+			if end == 0 {
+				end = limit
+			}
+		}
+
+		chunk := strings.TrimSpace(string(runes[:end]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = runes[end:]
+	}
+
+	return chunks
 }
 
 // formatHourRange 格式化单个时间点为小时范围（如 14:00-15:00）

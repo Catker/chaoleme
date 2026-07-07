@@ -11,18 +11,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const maxQueryRows = 200000
+
 // MetricType 指标类型
 type MetricType string
 
 const (
-	MetricTypeCPUSteal  MetricType = "cpu_steal"
-	MetricTypeCPUIoWait MetricType = "cpu_iowait"
-	MetricTypeCPUBench  MetricType = "cpu_bench"
-	MetricTypeIOLatency MetricType = "io_latency"
-	MetricTypeDiskStats MetricType = "disk_stats" // 磁盘统计（IOPS/吞吐量）
-	MetricTypeRandomIO  MetricType = "random_io"  // 随机 IO 延迟
-	MetricTypeMemory    MetricType = "memory"
-	MetricTypeCPULoad   MetricType = "cpu_load"
+	MetricTypeCPUSteal    MetricType = "cpu_steal"
+	MetricTypeCPUIoWait   MetricType = "cpu_iowait"
+	MetricTypeCPUBench    MetricType = "cpu_bench"
+	MetricTypeIOLatency   MetricType = "io_latency"
+	MetricTypeDiskStats   MetricType = "disk_stats" // 磁盘统计（IOPS/吞吐量）
+	MetricTypeRandomIO    MetricType = "random_io"  // 随机 IO 延迟
+	MetricTypeMemory      MetricType = "memory"
+	MetricTypeCPULoad     MetricType = "cpu_load"
+	MetricTypeCPUPressure MetricType = "cpu_pressure" // Linux PSI CPU 压力
+	MetricTypeIOPressure  MetricType = "io_pressure"  // Linux PSI IO 压力
+	MetricTypeCPUThrottle MetricType = "cpu_throttle" // cgroup CPU 限额节流
+	MetricTypeHostContext MetricType = "host_context" // 虚拟化/容器环境上下文
 )
 
 // Metric 指标数据
@@ -51,6 +57,8 @@ func New(dbPath string) (*Storage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	s := &Storage{db: db}
 	if err := s.init(); err != nil {
@@ -63,6 +71,17 @@ func New(dbPath string) (*Storage, error) {
 
 // init 初始化数据库表
 func (s *Storage) init() error {
+	pragmas := []string{
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA synchronous = NORMAL",
+	}
+	for _, pragma := range pragmas {
+		if _, err := s.db.Exec(pragma); err != nil {
+			return fmt.Errorf("设置 SQLite 参数失败 %q: %w", pragma, err)
+		}
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS metrics (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +150,10 @@ func (s *Storage) Query(metricType MetricType, start, end time.Time) ([]*Metric,
 
 	var metrics []*Metric
 	for rows.Next() {
+		if len(metrics) >= maxQueryRows {
+			return nil, fmt.Errorf("查询指标超过最大行数限制 %d，请缩短报告周期或先清理历史数据", maxQueryRows)
+		}
+
 		m := &Metric{}
 		var ts int64
 		var typeStr string
@@ -145,12 +168,15 @@ func (s *Storage) Query(metricType MetricType, start, end time.Time) ([]*Metric,
 
 		if extraStr.Valid && extraStr.String != "" {
 			if err := json.Unmarshal([]byte(extraStr.String), &m.Extra); err != nil {
-				// 忽略解析错误
-				m.Extra = nil
+				return nil, fmt.Errorf("解析 extra JSON 失败 id=%d type=%s: %w", m.ID, typeStr, err)
 			}
 		}
 
 		metrics = append(metrics, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历指标失败: %w", err)
 	}
 
 	return metrics, nil
@@ -192,7 +218,9 @@ func (s *Storage) GetLatestMetric(metricType MetricType) (*Metric, error) {
 	m.Type = MetricType(typeStr)
 
 	if extraStr.Valid && extraStr.String != "" {
-		json.Unmarshal([]byte(extraStr.String), &m.Extra)
+		if err := json.Unmarshal([]byte(extraStr.String), &m.Extra); err != nil {
+			return nil, fmt.Errorf("解析最新指标 extra JSON 失败 id=%d type=%s: %w", m.ID, typeStr, err)
+		}
 	}
 
 	return m, nil

@@ -55,9 +55,9 @@ func NewMemoryCollector() *MemoryCollector {
 
 // Collect 采集内存统计
 func (c *MemoryCollector) Collect() (*MemoryStats, error) {
-	file, err := os.Open("/proc/meminfo")
+	file, err := os.Open(procMeminfoPath)
 	if err != nil {
-		return nil, fmt.Errorf("无法打开 /proc/meminfo: %w", err)
+		return nil, fmt.Errorf("无法打开 %s: %w", procMeminfoPath, err)
 	}
 	defer file.Close()
 
@@ -96,7 +96,7 @@ func (c *MemoryCollector) Collect() (*MemoryStats, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("读取 /proc/meminfo 失败: %w", err)
+		return nil, fmt.Errorf("读取 %s 失败: %w", procMeminfoPath, err)
 	}
 
 	// 如果 MemAvailable 不存在（老内核），估算它

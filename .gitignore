@@ -4,6 +4,10 @@ chaoleme-linux-*
 # 测试数据
 *.db
 data.db
+.gocache/
+.gomodcache/
+*.test
+.codegraph/
 
 # IDE
 .idea/

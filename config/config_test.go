@@ -38,6 +38,45 @@ func TestLoadAIUsesDefaultModelAndURL(t *testing.T) {
 	}
 }
 
+func TestDefaultRetentionSupportsMonthlyTrend(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	if cfg.Storage.RetentionDays != minMonthlyRetentionDays {
+		t.Fatalf("默认保留天数应支撑月报历史趋势: got=%d want=%d", cfg.Storage.RetentionDays, minMonthlyRetentionDays)
+	}
+}
+
+func TestValidateRejectsRetentionTooShortForMonthlyTrend(t *testing.T) {
+	t.Parallel()
+
+	cfg := validTestConfig()
+	cfg.Storage.RetentionDays = 30
+	cfg.Report.Monthly = true
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("月报开启且保留天数不足时应返回错误")
+	}
+	if !strings.Contains(err.Error(), "至少需要 90 天") {
+		t.Fatalf("错误信息不符合预期: %v", err)
+	}
+}
+
+func TestValidateRetentionMatchesEnabledReports(t *testing.T) {
+	t.Parallel()
+
+	cfg := validTestConfig()
+	cfg.Report.Monthly = false
+	cfg.Report.Weekly = true
+	cfg.Report.Daily = true
+	cfg.Storage.RetentionDays = minWeeklyRetentionDays
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("周报开启时保留 %d 天应通过: %v", minWeeklyRetentionDays, err)
+	}
+}
+
 func TestLoadAIValidatesAPIKeyWhenEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -58,4 +97,11 @@ func TestLoadAIValidatesAPIKeyWhenEnabled(t *testing.T) {
 	if !strings.Contains(err.Error(), "ai.api_key 未配置") {
 		t.Fatalf("错误信息不符合预期: %v", err)
 	}
+}
+
+func validTestConfig() *Config {
+	cfg := DefaultConfig()
+	cfg.Telegram.BotToken = "test-token"
+	cfg.Telegram.ChatID = "test-chat"
+	return cfg
 }

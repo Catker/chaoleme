@@ -2,7 +2,7 @@
 # chaoleme 自动更新脚本
 # 用法: ./update.sh [选项] [版本号]
 # 示例: ./update.sh           # 更新到最新版本
-#       ./update.sh v1.2.0    # 更新到指定版本
+#       ./update.sh v1.3.0    # 更新到指定版本
 #       ./update.sh --force   # 强制重新安装当前版本
 #       ./update.sh rollback  # 回滚到上一版本
 # ========== 配置 ==========
@@ -11,6 +11,7 @@ INSTALL_DIR="/opt/chaoleme/bin"
 BINARY_NAME="chaoleme"
 SERVICE_NAME="chaoleme"
 BACKUP_DIR="/opt/chaoleme/backup"
+INSTALL_PATH_FILE="/etc/chaoleme_install_path"
 
 # ========== 颜色输出 ==========
 RED='\033[0;31m'
@@ -119,7 +120,9 @@ download_binary() {
     local version="$1"
     local arch="$2"
     local filename="chaoleme-linux-${arch}.tar.gz"
+    local checksum_filename="${filename}.sha256"
     local url="https://github.com/$REPO/releases/download/v${version}/${filename}"
+    local checksum_url="${url}.sha256"
     local tmp_dir
     tmp_dir=$(mktemp -d)
     
@@ -141,6 +144,29 @@ download_binary() {
         rm -rf "$tmp_dir"
         return 1
     fi
+
+    log_info "下载校验文件..."
+    local checksum_ok=false
+    if command -v curl &> /dev/null; then
+        if curl -fsSL "$checksum_url" -o "$tmp_dir/$checksum_filename" 2>/dev/null; then
+            checksum_ok=true
+        fi
+    elif command -v wget &> /dev/null; then
+        if wget -q "$checksum_url" -O "$tmp_dir/$checksum_filename" 2>/dev/null; then
+            checksum_ok=true
+        fi
+    fi
+
+    if [[ "$checksum_ok" != "true" ]]; then
+        log_error "校验文件下载失败: $checksum_url"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    if ! verify_checksum "$tmp_dir/$filename" "$tmp_dir/$checksum_filename"; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
     
     log_info "解压文件..."
     if ! tar -xzf "$tmp_dir/$filename" -C "$tmp_dir" 2>/dev/null; then
@@ -150,6 +176,34 @@ download_binary() {
     fi
     
     echo "$tmp_dir"
+}
+
+verify_checksum() {
+    local file="$1"
+    local checksum_file="$2"
+    local expected actual
+
+    expected=$(awk '{print $1}' "$checksum_file")
+    if [[ -z "$expected" ]]; then
+        log_error "校验文件格式无效"
+        return 1
+    fi
+
+    if command -v sha256sum &> /dev/null; then
+        actual=$(sha256sum "$file" | awk '{print $1}')
+    elif command -v shasum &> /dev/null; then
+        actual=$(shasum -a 256 "$file" | awk '{print $1}')
+    else
+        log_error "需要 sha256sum 或 shasum 进行文件校验"
+        return 1
+    fi
+
+    if [[ "$actual" != "$expected" ]]; then
+        log_error "SHA256 校验失败"
+        return 1
+    fi
+
+    log_info "SHA256 校验通过"
 }
 
 # ========== 备份当前版本 ==========
@@ -268,6 +322,15 @@ main() {
     local arch
     arch=$(detect_arch) || exit 1
     log_info "检测到架构: $arch"
+
+    if [[ -f "$INSTALL_PATH_FILE" ]]; then
+        local recorded_install_dir
+        recorded_install_dir=$(cat "$INSTALL_PATH_FILE")
+        if [[ -n "$recorded_install_dir" ]]; then
+            INSTALL_DIR="$recorded_install_dir/bin"
+            BACKUP_DIR="$recorded_install_dir/backup"
+        fi
+    fi
     
     # 获取当前版本
     local current_version

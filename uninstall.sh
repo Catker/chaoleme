@@ -22,6 +22,24 @@ check_root() {
     fi
 }
 
+validate_install_dir() {
+    local dir="$1"
+
+    if [ -z "$dir" ]; then
+        return 1
+    fi
+
+    case "$dir" in
+        /opt/chaoleme|/opt/chaoleme/*|/usr/local/chaoleme|/usr/local/chaoleme/*|/home/*/chaoleme)
+            return 0
+            ;;
+        *)
+            echo -e "${RED}安装路径不在允许范围，拒绝删除: $dir${NC}"
+            return 1
+            ;;
+    esac
+}
+
 # ========== 主函数 ==========
 main() {
     echo -e "${RED}=== 超了么 (chaoleme) 卸载脚本 ===${NC}"
@@ -33,6 +51,9 @@ main() {
     local INSTALL_DIR=""
     if [ -f /etc/chaoleme_install_path ]; then
         INSTALL_DIR=$(cat /etc/chaoleme_install_path)
+    fi
+    if ! validate_install_dir "$INSTALL_DIR"; then
+        INSTALL_DIR=""
     fi
     
     # 确认卸载

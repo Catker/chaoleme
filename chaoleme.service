@@ -4,11 +4,19 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/chaoleme --config /etc/chaoleme/config.yaml
+User=chaoleme
+Group=chaoleme
+ExecStart=/opt/chaoleme/bin/chaoleme --config /opt/chaoleme/config/config.yaml
+WorkingDirectory=/opt/chaoleme
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

@@ -18,18 +18,22 @@ type LoadResult struct {
 // CollectLoadAverage 采集系统 Load Average
 // 读取 /proc/loadavg 获取负载信息
 func CollectLoadAverage() (*LoadResult, error) {
-	file, err := os.Open("/proc/loadavg")
+	file, err := os.Open(procLoadavgPath)
 	if err != nil {
-		return nil, fmt.Errorf("无法打开 /proc/loadavg: %w", err)
+		return nil, fmt.Errorf("无法打开 %s: %w", procLoadavgPath, err)
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	if !scanner.Scan() {
-		return nil, fmt.Errorf("读取 /proc/loadavg 失败")
+		return nil, fmt.Errorf("读取 %s 失败", procLoadavgPath)
 	}
 
 	line := scanner.Text()
+	return parseLoadAverageLine(line)
+}
+
+func parseLoadAverageLine(line string) (*LoadResult, error) {
 	fields := strings.Fields(line)
 	if len(fields) < 3 {
 		return nil, fmt.Errorf("loadavg 格式错误: %s", line)

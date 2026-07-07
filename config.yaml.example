@@ -19,8 +19,8 @@ report:
 
 # 存储配置
 storage:
-  db_path: "/var/lib/chaoleme/data.db"  # 数据库路径
-  retention_days: 30                         # 数据保留天数
+  db_path: "/opt/chaoleme/data/data.db"  # 数据库路径
+  retention_days: 90                         # 数据保留天数；月报历史趋势至少需要 90 天
 
 # 采集配置
 collect:

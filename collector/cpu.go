@@ -24,26 +24,33 @@ type CPUStats struct {
 	GuestNice uint64
 }
 
-// Total 计算总 CPU 时间
+// Total 计算总 CPU 时间。
+// /proc/stat 中 guest/guest_nice 已包含在 user/nice 中，不能重复计入。
 func (s *CPUStats) Total() uint64 {
-	return s.User + s.Nice + s.System + s.Idle + s.IOWait + s.IRQ + s.SoftIRQ + s.Steal + s.Guest + s.GuestNice
+	return s.User + s.Nice + s.System + s.Idle + s.IOWait + s.IRQ + s.SoftIRQ + s.Steal
 }
 
 // CPUCollector CPU 数据采集器
 type CPUCollector struct {
-	lastStats *CPUStats
+	lastStats   *CPUStats
+	warmupDelay time.Duration
 }
 
 // NewCPUCollector 创建 CPU 采集器
 func NewCPUCollector() *CPUCollector {
-	return &CPUCollector{}
+	return NewCPUCollectorWithWarmupDelay(500 * time.Millisecond)
+}
+
+// NewCPUCollectorWithWarmupDelay 创建可配置首次采样间隔的 CPU 采集器。
+func NewCPUCollectorWithWarmupDelay(warmupDelay time.Duration) *CPUCollector {
+	return &CPUCollector{warmupDelay: warmupDelay}
 }
 
 // readCPUStats 从 /proc/stat 读取 CPU 统计
 func readCPUStats() (*CPUStats, error) {
-	file, err := os.Open("/proc/stat")
+	file, err := os.Open(procStatPath)
 	if err != nil {
-		return nil, fmt.Errorf("无法打开 /proc/stat: %w", err)
+		return nil, fmt.Errorf("无法打开 %s: %w", procStatPath, err)
 	}
 	defer file.Close()
 
@@ -100,29 +107,39 @@ func (c *CPUCollector) Collect() (*CPUUsage, error) {
 
 	if c.lastStats == nil {
 		c.lastStats = current
-		// 等待一小段时间再采集，确保有时间差
-		// 使用 500ms 而非 100ms，减少瞬时波动对 Steal/IOWait 计算的影响
-		time.Sleep(500 * time.Millisecond)
+		// 首次采样需要时间差；采样间隔可由调用方在构造时设置。
+		if c.warmupDelay > 0 {
+			time.Sleep(c.warmupDelay)
+		}
 		current, err = readCPUStats()
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	totalDelta := current.Total() - c.lastStats.Total()
-	stealDelta := current.Steal - c.lastStats.Steal
-	iowaitDelta := current.IOWait - c.lastStats.IOWait
-
-	// 更新 lastStats
+	usage, err := calculateCPUUsage(c.lastStats, current)
 	c.lastStats = current
+	if err != nil {
+		return nil, err
+	}
+	return usage, nil
+}
 
+func calculateCPUUsage(previous, current *CPUStats) (*CPUUsage, error) {
+	previousTotal := previous.Total()
+	currentTotal := current.Total()
+	if currentTotal < previousTotal || current.Steal < previous.Steal || current.IOWait < previous.IOWait {
+		return nil, fmt.Errorf("CPU 计数器回退，跳过本次采集")
+	}
+
+	totalDelta := currentTotal - previousTotal
 	if totalDelta == 0 {
-		return &CPUUsage{0, 0}, nil
+		return &CPUUsage{}, nil
 	}
 
 	return &CPUUsage{
-		StealPercent:  float64(stealDelta) / float64(totalDelta) * 100,
-		IOWaitPercent: float64(iowaitDelta) / float64(totalDelta) * 100,
+		StealPercent:  float64(current.Steal-previous.Steal) / float64(totalDelta) * 100,
+		IOWaitPercent: float64(current.IOWait-previous.IOWait) / float64(totalDelta) * 100,
 	}, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -167,6 +168,82 @@ func TestAIAnalyzerKeepsPreviousConfigWhenReloadFails(t *testing.T) {
 	}
 }
 
+func TestAIAnalyzerRetriesReloadAfterFailureWithSameModTime(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"reloaded"}}]}`))
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	initialModTime := time.Now().Add(-2 * time.Minute)
+	nextModTime := initialModTime.Add(time.Minute)
+
+	writeAIConfig(t, configPath, initialModTime, true, server.URL, "old-key", "old-model")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("加载初始配置失败: %v", err)
+	}
+	analyzer := NewAIAnalyzer(&cfg.AI, configPath)
+
+	writeInvalidAIConfig(t, configPath, nextModTime, server.URL)
+	if _, err := analyzer.Analyze(&PeriodStats{}, "daily"); err != nil {
+		t.Fatalf("无效配置后应继续使用旧配置: %v", err)
+	}
+
+	writeAIConfig(t, configPath, nextModTime, true, server.URL, "new-key", "new-model")
+	result, err := analyzer.Analyze(&PeriodStats{}, "daily")
+	if err != nil {
+		t.Fatalf("相同修改时间修复配置后应重试热重载: %v", err)
+	}
+	if result != "reloaded" {
+		t.Fatalf("热重载结果不符合预期: %q", result)
+	}
+	if got := analyzer.currentConfig().Model; got != "new-model" {
+		t.Fatalf("应使用修复后的配置，实际模型=%s", got)
+	}
+}
+
+func TestAIAnalyzerRejectsBadHTTPStatus(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	analyzer := NewAIAnalyzer(&config.AIConfig{}, "")
+	_, err := analyzer.callAPI(
+		t.Context(),
+		"prompt",
+		config.AIConfig{APIURL: server.URL, APIKey: "key", Model: "model"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "API HTTP 状态异常 (502)") {
+		t.Fatalf("非 2xx 状态应返回明确错误，实际=%v", err)
+	}
+}
+
+func TestAIAnalyzerRejectsOversizedResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxAIResponseBytes+1)))
+	}))
+	defer server.Close()
+
+	analyzer := NewAIAnalyzer(&config.AIConfig{}, "")
+	_, err := analyzer.callAPI(
+		t.Context(),
+		"prompt",
+		config.AIConfig{APIURL: server.URL, APIKey: "key", Model: "model"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "API 响应过大") {
+		t.Fatalf("超大响应应返回明确错误，实际=%v", err)
+	}
+}
+
 func writeAIConfig(t *testing.T, path string, modTime time.Time, enabled bool, apiURL, apiKey, model string) {
 	t.Helper()
 
@@ -183,7 +260,7 @@ report:
   monthly_day: 1
 storage:
   db_path: "/tmp/chaoleme-test.db"
-  retention_days: 30
+  retention_days: 90
 collect:
   cpu_steal_interval: "5m"
   cpu_bench_interval: "30m"
@@ -223,7 +300,7 @@ report:
   monthly_day: 1
 storage:
   db_path: "/tmp/chaoleme-test.db"
-  retention_days: 30
+  retention_days: 90
 collect:
   cpu_steal_interval: "5m"
   cpu_bench_interval: "30m"
@@ -253,4 +330,28 @@ func boolToYAML(v bool) string {
 	}
 
 	return "false"
+}
+
+func TestAIAnalyzerPromptUsesEvidenceVerdict(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig().AI
+	analyzer := NewAIAnalyzer(&cfg, "")
+	stats := &PeriodStats{
+		OversellVerdict: OversellPossible,
+		EvidenceLevel:   EvidenceMedium,
+		MissingMetrics:  []string{"random_io_direct"},
+		QueryErrors:     []string{"host_context: broken json"},
+		TotalScore:      72,
+	}
+
+	prompt := analyzer.buildPrompt(stats, "monthly")
+	for _, want := range []string{"规则判定", "超售判定", "证据等级", "缺失指标", "查询错误", "O_DIRECT", "健康评分"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("提示词缺少 %q，内容:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "规则评分") || strings.Contains(prompt, "建议更换服务商") {
+		t.Fatalf("提示词包含旧结论表述，内容:\n%s", prompt)
+	}
 }
