@@ -68,6 +68,8 @@ func TestBuildReportJSONIncludesEvidenceFields(t *testing.T) {
 		CPUPressureSamples:      288,
 		CPUThrottleSamples:      288,
 		CPUStealP95:             16,
+		CPUStealWorstHourAvg:    18,
+		CPUStealHighTimePercent: 4.5,
 		RandomIOP95:             3.2,
 		CPUPressureSomeP95:      12,
 		CPUThrottleP95:          0,
@@ -112,20 +114,25 @@ func TestBuildReportJSONIncludesEvidenceFields(t *testing.T) {
 		t.Fatalf("核心覆盖率不符合预期: %v", decoded["core_coverage_percent"])
 	}
 	numberChecks := map[string]float64{
-		"cpu_steal_samples":        288,
-		"cpu_iowait_samples":       288,
-		"random_io_samples":        96,
-		"random_io_direct_samples": 96,
-		"cpu_pressure_samples":     288,
-		"cpu_throttle_samples":     288,
-		"cpu_steal_p95":            16,
-		"random_io_p95":            3.2,
-		"cpu_pressure_some_p95":    12,
+		"cpu_steal_samples":           288,
+		"cpu_iowait_samples":          288,
+		"random_io_samples":           96,
+		"random_io_direct_samples":    96,
+		"cpu_pressure_samples":        288,
+		"cpu_throttle_samples":        288,
+		"cpu_steal_p95":               16,
+		"random_io_p95":               3.2,
+		"cpu_pressure_some_p95":       12,
+		"cpu_steal_worst_hour_avg":    18,
+		"cpu_steal_high_time_percent": 4.5,
 	}
 	for key, want := range numberChecks {
 		if got := decoded[key]; got != want {
 			t.Fatalf("%s 不符合预期: got=%v want=%.1f", key, got, want)
 		}
+	}
+	if decoded["cpu_steal_worst_hour_start"] != nil {
+		t.Fatalf("没有最差窗口时应输出 null: %v", decoded["cpu_steal_worst_hour_start"])
 	}
 	if decoded["storage_type"] != string(collector.StorageTypeSSD) {
 		t.Fatalf("存储类型不符合预期: %v", decoded["storage_type"])

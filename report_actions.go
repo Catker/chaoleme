@@ -51,6 +51,10 @@ type reportJSONOutput struct {
 	CPUStealAvg           float64                        `json:"cpu_steal_avg"`
 	CPUStealMax           float64                        `json:"cpu_steal_max"`
 	CPUStealP95           float64                        `json:"cpu_steal_p95"`
+	CPUStealHighTimePct   float64                        `json:"cpu_steal_high_time_percent"`
+	CPUStealHighTimeHours float64                        `json:"cpu_steal_high_time_hours"`
+	CPUStealWorstHourAvg  float64                        `json:"cpu_steal_worst_hour_avg"`
+	CPUStealWorstHour     *time.Time                     `json:"cpu_steal_worst_hour_start"`
 	CPUIoWaitAvg          float64                        `json:"cpu_iowait_avg"`
 	CPUIoWaitMax          float64                        `json:"cpu_iowait_max"`
 	CPUIoWaitP95          float64                        `json:"cpu_iowait_p95"`
@@ -93,6 +97,14 @@ type reportJSONOutput struct {
 	StealDirect           bool                           `json:"steal_directly_interpretable"`
 }
 
+// optionalTime 让零值时间在 JSON 中输出为 null。
+func optionalTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
 func buildReportJSON(stats *analyzer.PeriodStats) ([]byte, error) {
 	return json.MarshalIndent(reportJSONOutput{
 		Period:                stats.Period,
@@ -120,6 +132,10 @@ func buildReportJSON(stats *analyzer.PeriodStats) ([]byte, error) {
 		CPUStealAvg:           stats.CPUStealAvg,
 		CPUStealMax:           stats.CPUStealMax,
 		CPUStealP95:           stats.CPUStealP95,
+		CPUStealHighTimePct:   stats.CPUStealHighTimePercent,
+		CPUStealHighTimeHours: stats.CPUStealHighTimeHours,
+		CPUStealWorstHourAvg:  stats.CPUStealWorstHourAvg,
+		CPUStealWorstHour:     optionalTime(stats.CPUStealWorstHourStart),
 		CPUIoWaitAvg:          stats.CPUIoWaitAvg,
 		CPUIoWaitMax:          stats.CPUIoWaitMax,
 		CPUIoWaitP95:          stats.CPUIoWaitP95,
@@ -242,8 +258,8 @@ func reportCheckResult(stats *analyzer.PeriodStats) (int, string) {
 	buf.WriteString(fmt.Sprintf("🔎 证据等级: %s\n", stats.EvidenceLevel.Label()))
 	buf.WriteString(fmt.Sprintf("🧪 核心样本: %d/%d，覆盖 %.1f%%\n",
 		stats.CPUStealSamples, stats.CPUIoWaitSamples, stats.CoreCoveragePercent))
-	buf.WriteString(fmt.Sprintf("🖥️ CPU Steal: 平均 %.2f%% / P95 %.2f%%\n",
-		stats.CPUStealAvg, stats.CPUStealP95))
+	buf.WriteString(fmt.Sprintf("🖥️ CPU Steal: 平均 %.2f%% / P95 %.2f%%，最差 1 小时 %.2f%% (%s)，Steal≥10%% 占 %.1f%%\n",
+		stats.CPUStealAvg, stats.CPUStealP95, stats.CPUStealWorstHourAvg, stats.StealWorstHourLabel(), stats.CPUStealHighTimePercent))
 	buf.WriteString(fmt.Sprintf("📊 Load/PSI: Load %.2f，CPU PSI P95 %.2f%%，IO PSI P95 %.2f%%\n",
 		stats.CPULoadAvg, stats.CPUPressureSomeP95, stats.IOPressureSomeP95))
 	buf.WriteString(fmt.Sprintf("🧱 环境: virt=%s container=%t steal_direct=%t\n",

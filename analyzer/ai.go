@@ -172,6 +172,7 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 
 ## 数据摘要
 - CPU Steal Time: 平均 %.2f%%，P95 %.2f%%，峰值 %.2f%% @ %s
+- CPU Steal 高峰时段: 最差 1 小时均值 %.2f%% (%s)，Steal≥10%% 累计 %.1f 小时（占 %.1f%%）
 - CPU IOWait: 平均 %.2f%%，P95 %.2f%%，峰值时间 %s
 - CPU 基准测试: 平均耗时 %.2fms，变异系数 %.3f
 - CPU Load (归一化): 平均 %.2f，最大 %.2f
@@ -194,6 +195,7 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 		strings.Join(stats.MissingMetrics, ", "), strings.Join(stats.QueryErrors, " | "),
 		stats.VirtualizationType, stats.HypervisorDetected, stats.ContainerDetected, stats.StealDirectlyInterpretable,
 		stats.CPUStealAvg, stats.CPUStealP95, stats.CPUStealMax, stealPeakTime,
+		stats.CPUStealWorstHourAvg, stats.StealWorstHourLabel(), stats.CPUStealHighTimeHours, stats.CPUStealHighTimePercent,
 		stats.CPUIoWaitAvg, stats.CPUIoWaitP95, iowaitPeakTime,
 		stats.CPUBenchAvg, stats.CPUBenchCV,
 		stats.CPULoadAvg, stats.CPULoadMax,

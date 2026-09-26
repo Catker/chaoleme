@@ -99,6 +99,10 @@ func (r *TelegramReporter) FormatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	if !stats.CPUStealMaxTime.IsZero() {
 		buf.WriteString(fmt.Sprintf("   • 峰值时段: %s\n", formatHourRange(stats.CPUStealMaxTime)))
 	}
+	if !stats.CPUStealWorstHourStart.IsZero() {
+		buf.WriteString(fmt.Sprintf("   • 最差 1 小时: %s 均值 %.2f%%\n", stats.StealWorstHourLabel(), stats.CPUStealWorstHourAvg))
+	}
+	buf.WriteString(fmt.Sprintf("   • 高争抢时长 (Steal≥10%%): %.1f小时 / %.1f%%\n", stats.CPUStealHighTimeHours, stats.CPUStealHighTimePercent))
 	buf.WriteString(fmt.Sprintf("   • 性能波动系数: %.3f\n\n", stats.CPUBenchCV))
 
 	// CPU IOWait

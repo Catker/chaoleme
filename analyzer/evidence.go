@@ -117,8 +117,13 @@ func (a *Analyzer) calculateOversellVerdict(stats *PeriodStats) {
 	lowLocalLoad := hasLoad && stats.CPULoadAvg < 0.70
 	highLocalLoad := hasLoad && stats.CPULoadAvg >= 1.20
 
-	strongSteal := stats.CPUStealAvg >= 8 || stats.CPUStealP95 >= 15
-	mediumSteal := stats.CPUStealAvg >= 3 || stats.CPUStealP95 >= 8
+	strongStealByPeriod := stats.CPUStealAvg >= 8 || stats.CPUStealP95 >= 15
+	mediumStealByPeriod := stats.CPUStealAvg >= 3 || stats.CPUStealP95 >= 8
+	// 高峰时段证据：间歇性争抢会被全周期均值冲淡，改看最差 1 小时和高争抢累计时长。
+	strongStealByPeak := stats.CPUStealWorstHourAvg >= stealPeakStrongWindowAvg && stats.CPUStealHighTimePercent >= stealPeakStrongHighTime
+	mediumStealByPeak := stats.CPUStealWorstHourAvg >= stealPeakMediumWindowAvg || stats.CPUStealHighTimePercent >= stealPeakMediumHighTime
+	strongSteal := strongStealByPeriod || strongStealByPeak
+	mediumSteal := mediumStealByPeriod || mediumStealByPeak
 	strongIOWait := stats.CPUIoWaitAvg >= 15 || stats.CPUIoWaitP95 >= 30
 	strongCPUPressure := stats.CPUPressureSamples > 0 && (stats.CPUPressureSomeAvg >= 10 || stats.CPUPressureSomeP95 >= 20)
 	strongCPUThrottle := stats.CPUThrottleSamples > 0 && (stats.CPUThrottleAvg >= 20 || stats.CPUThrottleP95 >= 50)
@@ -162,7 +167,11 @@ func (a *Analyzer) calculateOversellVerdict(stats *PeriodStats) {
 		} else {
 			stats.OversellVerdict = OversellLikely
 		}
-		stats.EvidenceSummary = append(stats.EvidenceSummary, "CPU Steal 已达到强证据阈值")
+		if strongStealByPeriod {
+			stats.EvidenceSummary = append(stats.EvidenceSummary, "CPU Steal 已达到强证据阈值")
+		} else {
+			stats.EvidenceSummary = append(stats.EvidenceSummary, "CPU Steal 在高峰时段达到强证据阈值："+stealPeakDescription(stats))
+		}
 		if stealContextWeak {
 			stats.EvidenceSummary = append(stats.EvidenceSummary, "运行环境使 CPU Steal 解释强度下降")
 		}
@@ -186,7 +195,11 @@ func (a *Analyzer) calculateOversellVerdict(stats *PeriodStats) {
 
 	if mediumSteal && (lowLocalLoad || strongCPUPressure || benchUnstable || baselineDown) {
 		stats.OversellVerdict = OversellPossible
-		stats.EvidenceSummary = append(stats.EvidenceSummary, "CPU Steal 出现持续异常")
+		if mediumStealByPeriod {
+			stats.EvidenceSummary = append(stats.EvidenceSummary, "CPU Steal 出现持续异常")
+		} else {
+			stats.EvidenceSummary = append(stats.EvidenceSummary, "CPU Steal 在部分时段出现异常："+stealPeakDescription(stats))
+		}
 		return
 	}
 
@@ -227,4 +240,9 @@ func (a *Analyzer) calculateOversellVerdict(stats *PeriodStats) {
 		return
 	}
 	stats.EvidenceSummary = append(stats.EvidenceSummary, "核心指标未达到超售证据阈值")
+}
+
+func stealPeakDescription(stats *PeriodStats) string {
+	return fmt.Sprintf("最差 1 小时均值 %.1f%%，Steal≥%.0f%% 累计 %.1f 小时（占 %.1f%%）",
+		stats.CPUStealWorstHourAvg, stealHighThreshold, stats.CPUStealHighTimeHours, stats.CPUStealHighTimePercent)
 }

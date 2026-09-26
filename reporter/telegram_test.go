@@ -50,14 +50,18 @@ func TestFormatReportShowsContentionEventsAndDiskDevice(t *testing.T) {
 
 	start := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	message := NewTelegramReporter(&config.TelegramConfig{}, "test-host").FormatReport(&analyzer.PeriodStats{
-		Period:                "daily",
-		EndTime:               start.Add(2 * time.Hour),
-		RiskDetails:           map[string]string{"disk_busy": "✅ 低"},
-		DiskStatsSamples:      2,
-		DiskStatsDeviceName:   "vda1",
-		DiskStatsDeviceStatus: "single",
-		DiskBusyAvailable:     true,
-		DiskBusyP95:           12.5,
+		Period:                  "daily",
+		EndTime:                 start.Add(2 * time.Hour),
+		RiskDetails:             map[string]string{"disk_busy": "✅ 低"},
+		DiskStatsSamples:        2,
+		DiskStatsDeviceName:     "vda1",
+		DiskStatsDeviceStatus:   "single",
+		DiskBusyAvailable:       true,
+		DiskBusyP95:             12.5,
+		CPUStealWorstHourAvg:    18.5,
+		CPUStealWorstHourStart:  start,
+		CPUStealHighTimeHours:   1.2,
+		CPUStealHighTimePercent: 5,
 		ContentionEvents: []analyzer.ContentionEvent{{
 			Type:        "cpu_steal",
 			StartTime:   start,
@@ -67,7 +71,7 @@ func TestFormatReportShowsContentionEventsAndDiskDevice(t *testing.T) {
 		}},
 	}, "")
 
-	for _, want := range []string{"设备: vda1", "🕒 异常事件", "cpu_steal", "2 个样本", "峰值 12.0%"} {
+	for _, want := range []string{"设备: vda1", "🕒 异常事件", "cpu_steal", "2 个样本", "峰值 12.0%", "最差 1 小时: 07-07 10:00~11:00 均值 18.50%", "1.2小时 / 5.0%"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("报告缺少 %q，内容:\n%s", want, message)
 		}

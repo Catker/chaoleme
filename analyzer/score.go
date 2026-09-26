@@ -63,6 +63,12 @@ type PeriodStats struct {
 	CPUStealP95     float64
 	CPUStealMaxTime time.Time // 峰值发生时间
 
+	// 按时间加权的 Steal 统计，包含 burst 样本，用于识别被全周期均值冲淡的高峰时段争抢。
+	CPUStealHighTimePercent float64   // Steal ≥10% 的时长占覆盖时间的比例
+	CPUStealHighTimeHours   float64   // Steal ≥10% 的累计时长
+	CPUStealWorstHourAvg    float64   // 最差 1 小时窗口的时间加权均值
+	CPUStealWorstHourStart  time.Time // 最差 1 小时窗口起点
+
 	// CPU IOWait 统计
 	CPUIoWaitAvg     float64
 	CPUIoWaitMax     float64
@@ -204,6 +210,13 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		stats.CPUStealP95 = percentile(values, 95)
 		// 记录峰值发生时间
 		_, stats.CPUStealMaxTime = findMaxWithTime(cpuStealMetrics)
+	}
+	stealTimeline := analyzeStealTimeline(buildStealTimeline(cpuStealAllMetrics, cpuStealMetrics))
+	stats.CPUStealHighTimePercent = stealTimeline.HighTimePercent
+	stats.CPUStealHighTimeHours = stealTimeline.HighTimeHours
+	if !stealTimeline.WorstWindowEnd.IsZero() {
+		stats.CPUStealWorstHourAvg = stealTimeline.WorstWindowAvg
+		stats.CPUStealWorstHourStart = stealTimeline.WorstWindowEnd.Add(-stealWindow)
 	}
 
 	// 计算 CPU IOWait 统计

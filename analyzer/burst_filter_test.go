@@ -27,9 +27,22 @@ func TestAnalyzePeriodBurstSamplesDoNotAffectLegacyFields(t *testing.T) {
 	}
 	regularStats.ContentionEvents = nil
 	burstStats.ContentionEvents = nil
+	// 时间加权的 Steal 统计按设计包含 burst 样本；3 秒的 burst 不应改变结论。
+	if burstStats.CPUStealHighTimeHours <= regularStats.CPUStealHighTimeHours {
+		t.Fatalf("burst 样本应计入时间加权统计: regular=%.6f burst=%.6f", regularStats.CPUStealHighTimeHours, burstStats.CPUStealHighTimeHours)
+	}
+	clearStealTimelineFields(regularStats)
+	clearStealTimelineFields(burstStats)
 	if !reflect.DeepEqual(regularStats, burstStats) {
 		t.Fatalf("burst 样本改变了常规统计或结论:\n常规=%+v\nburst=%+v", regularStats, burstStats)
 	}
+}
+
+func clearStealTimelineFields(stats *PeriodStats) {
+	stats.CPUStealHighTimePercent = 0
+	stats.CPUStealHighTimeHours = 0
+	stats.CPUStealWorstHourAvg = 0
+	stats.CPUStealWorstHourStart = time.Time{}
 }
 
 func writeRegularPeriod(t *testing.T, store *storage.Storage, start time.Time) {
