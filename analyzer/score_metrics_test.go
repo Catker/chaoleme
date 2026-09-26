@@ -161,3 +161,39 @@ func TestFindMissingMetricsMarksUnusableDiskStats(t *testing.T) {
 		t.Fatal("单设备且已计算 busy 时 disk_stats 不应标记不可用")
 	}
 }
+
+func TestCalculatePressurePercentsFromCumulativeTotal(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now()
+	metrics := []*storage.Metric{
+		// avg10 快照为 0，但区间内累计等待 60 秒。
+		{Timestamp: start, Value: 0, Extra: storage.NewPressureExtra(0, 0, 0, 1_000_000, 0, 0, 0, 0, false)},
+		{Timestamp: start.Add(5 * time.Minute), Value: 0, Extra: storage.NewPressureExtra(0, 0, 0, 61_000_000, 0, 0, 0, 0, false)},
+		// 计数器回退（重启）的区间应跳过。
+		{Timestamp: start.Add(10 * time.Minute), Value: 0, Extra: storage.NewPressureExtra(0, 0, 0, 500, 0, 0, 0, 0, false)},
+	}
+
+	percents := calculatePressurePercents(metrics)
+	if len(percents) != 1 {
+		t.Fatalf("期望 1 个区间样本，实际=%v", percents)
+	}
+	if percents[0] != 20 {
+		t.Fatalf("期望 60s/300s=20%%，实际=%.2f", percents[0])
+	}
+}
+
+func TestCalculatePressurePercentsFallsBackToAvg10ForLegacySamples(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now()
+	metrics := []*storage.Metric{
+		{Timestamp: start, Value: 12},
+		{Timestamp: start.Add(5 * time.Minute), Value: 8},
+	}
+
+	percents := calculatePressurePercents(metrics)
+	if len(percents) != 2 || percents[0] != 12 || percents[1] != 8 {
+		t.Fatalf("缺少 total 的旧样本应回退到 avg10，实际=%v", percents)
+	}
+}

@@ -274,7 +274,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	cpuPressureMetrics := filterRegularMetrics(cpuPressureAllMetrics)
 	stats.CPUPressureSamples = len(cpuPressureMetrics)
 	if len(cpuPressureMetrics) > 0 {
-		values := extractValues(cpuPressureMetrics)
+		values := calculatePressurePercents(cpuPressureMetrics)
 		stats.CPUPressureSomeAvg = avg(values)
 		stats.CPUPressureSomeP95 = percentile(values, 95)
 	}
@@ -292,7 +292,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	ioPressureMetrics := filterRegularMetrics(ioPressureAllMetrics)
 	stats.IOPressureSamples = len(ioPressureMetrics)
 	if len(ioPressureMetrics) > 0 {
-		values := extractValues(ioPressureMetrics)
+		values := calculatePressurePercents(ioPressureMetrics)
 		stats.IOPressureSomeAvg = avg(values)
 		stats.IOPressureSomeP95 = percentile(values, 95)
 	}

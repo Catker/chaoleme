@@ -320,7 +320,7 @@ CHAOLEME_BIN=chaoleme CHAOLEME_CONFIG=/opt/chaoleme/config/config.yaml \
 | IOWait | 辅助证据 | 进程等待 I/O 完成的时间，需结合 Load 与磁盘指标判断 |
 | 随机 I/O | 辅助证据 | 4KB 随机读写延迟是存储争抢的敏感指标 |
 | 磁盘繁忙度 | 辅助证据 | 基于 `/proc/diskstats` 累计 IO 时间增量计算 |
-| Linux PSI | 辅助证据 | 衡量任务因 CPU/IO 资源不足产生等待的比例 |
+| Linux PSI | 辅助证据 | 衡量任务因 CPU/IO 资源不足产生等待的比例，按两次采样间的累计等待时间计算 |
 | cgroup CPU 节流 | 排除证据 | 节流明显且 Steal 正常时，更像本机限额而非宿主超售 |
 | 运行环境上下文 | 解释边界 | 容器或未知虚拟化环境会降低 Steal 结论强度，超过 7 天的环境记录会被忽略 |
 | 历史趋势 | 趋势证据 | 使用 median/P75/P95 与质量评级检测性能是否逐渐恶化 |

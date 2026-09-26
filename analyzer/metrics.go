@@ -125,6 +125,26 @@ func calculateCPUThrottlePercents(metrics []*storage.Metric) []float64 {
 	return extractValues(metrics)
 }
 
+// calculatePressurePercents 用 PSI some total（累计等待微秒）的区间差值计算等待占比。
+// 相比 avg10 快照只覆盖采样前 10 秒，差值覆盖两次采样之间的全部时间。
+// 计数器回退（如重启）的区间会跳过；旧数据缺少 total 时回退到 avg10。
+func calculatePressurePercents(metrics []*storage.Metric) []float64 {
+	var percents []float64
+	for i := 1; i < len(metrics); i++ {
+		prevTotal, okPrev := extraFloat(metrics[i-1], storage.ExtraSomeTotal)
+		currTotal, okCurr := extraFloat(metrics[i], storage.ExtraSomeTotal)
+		elapsedUsec := float64(metrics[i].Timestamp.Sub(metrics[i-1].Timestamp).Microseconds())
+		if !okPrev || !okCurr || elapsedUsec <= 0 || currTotal < prevTotal {
+			continue
+		}
+		percents = append(percents, clampPercent((currTotal-prevTotal)/elapsedUsec*100))
+	}
+	if len(percents) > 0 {
+		return percents
+	}
+	return extractValues(metrics)
+}
+
 func calculateDiskBusyPercents(metrics []*storage.Metric) []float64 {
 	var busyPercents []float64
 
