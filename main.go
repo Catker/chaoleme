@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/Catker/chaoleme/analyzer"
 	"github.com/Catker/chaoleme/collector"
@@ -80,7 +81,12 @@ func main() {
 
 	// 初始化采集器
 	cpuCollector := collector.NewCPUCollector()
-	diskCollector := collector.NewDiskCollector(cfg.Collect.IOTestSizeMB)
+	diskCollector := collector.NewDiskCollectorWithRandomIO(cfg.Collect.IOTestSizeMB, collector.RandomIOOptions{
+		Dir:    filepath.Dir(cfg.Storage.DBPath),
+		FileMB: cfg.Collect.RandomIOFileMB,
+		Reads:  cfg.Collect.RandomIOReads,
+		Writes: cfg.Collect.RandomIOWrites,
+	})
 	memoryCollector := collector.NewMemoryCollector()
 
 	// 初始化分析器

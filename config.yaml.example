@@ -27,7 +27,10 @@ collect:
   cpu_steal_interval: "5m"   # CPU Steal 采集间隔
   cpu_bench_interval: "30m"  # CPU 基准测试间隔
   io_test_interval: "15m"    # I/O 延迟测试间隔
-  io_test_size_mb: 4         # I/O 测试文件大小 (MB)
+  io_test_size_mb: 1         # 顺序写测试大小 (MB)，每次写入后 fsync
+  random_io_file_mb: 64      # 随机 I/O 预写文件大小 (MB)，常驻在数据目录，越大越不易命中宿主机缓存
+  random_io_reads: 128       # 每次测试的 4KB 随机读次数
+  random_io_writes: 32       # 每次测试的 4KB 随机写次数
   burst_interval: "30s"     # 异常期间的密集采样间隔
   burst_duration: "10m"     # 单次异常密集采样持续时间
 

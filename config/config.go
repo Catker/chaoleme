@@ -16,6 +16,10 @@ const (
 	minDailyRetentionDays   = 15
 	minWeeklyRetentionDays  = 35
 	minMonthlyRetentionDays = 90
+
+	// 随机 I/O 参数上限，避免误配置导致单次测试占用过多磁盘或时间。
+	maxRandomIOFileMB = 4096
+	maxRandomIOOps    = 10000
 )
 
 // Config 主配置结构
@@ -56,6 +60,9 @@ type CollectConfig struct {
 	CPUBenchInterval string `yaml:"cpu_bench_interval"`
 	IOTestInterval   string `yaml:"io_test_interval"`
 	IOTestSizeMB     int    `yaml:"io_test_size_mb"`
+	RandomIOFileMB   int    `yaml:"random_io_file_mb"` // 随机 I/O 预写文件大小，常驻在数据目录
+	RandomIOReads    int    `yaml:"random_io_reads"`   // 每次测试的 4KB 随机读次数
+	RandomIOWrites   int    `yaml:"random_io_writes"`  // 每次测试的 4KB 随机写次数
 	BurstInterval    string `yaml:"burst_interval"`
 	BurstDuration    string `yaml:"burst_duration"`
 }
@@ -94,7 +101,10 @@ func DefaultConfig() *Config {
 			CPUStealInterval: "5m",
 			CPUBenchInterval: "30m",
 			IOTestInterval:   "15m",
-			IOTestSizeMB:     4,
+			IOTestSizeMB:     1,
+			RandomIOFileMB:   64,
+			RandomIOReads:    128,
+			RandomIOWrites:   32,
 			BurstInterval:    "30s",
 			BurstDuration:    "10m",
 		},
@@ -193,6 +203,15 @@ func (c *Config) Validate() error {
 	if c.Collect.IOTestSizeMB <= 0 {
 		return fmt.Errorf("io_test_size_mb 必须大于 0")
 	}
+	if err := validateIntRange("random_io_file_mb", c.Collect.RandomIOFileMB, 1, maxRandomIOFileMB); err != nil {
+		return err
+	}
+	if err := validateIntRange("random_io_reads", c.Collect.RandomIOReads, 1, maxRandomIOOps); err != nil {
+		return err
+	}
+	if err := validateIntRange("random_io_writes", c.Collect.RandomIOWrites, 1, maxRandomIOOps); err != nil {
+		return err
+	}
 	burstInterval, _ := time.ParseDuration(c.Collect.BurstInterval)
 	burstDuration, _ := time.ParseDuration(c.Collect.BurstDuration)
 	if burstInterval >= burstDuration {
@@ -235,6 +254,13 @@ func (c *Config) validateRetentionDays() error {
 	}
 	if c.Storage.RetentionDays < requiredDays {
 		return fmt.Errorf("storage.retention_days=%d 不足以支撑 %s 报告历史趋势，至少需要 %d 天", c.Storage.RetentionDays, requiredReport, requiredDays)
+	}
+	return nil
+}
+
+func validateIntRange(name string, value, min, max int) error {
+	if value < min || value > max {
+		return fmt.Errorf("%s 必须在 %d-%d 之间，当前 %d", name, min, max, value)
 	}
 	return nil
 }

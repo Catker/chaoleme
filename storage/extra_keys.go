@@ -15,6 +15,17 @@ const (
 	ExtraDirectIOWrite  = "direct_io_write"
 	ExtraDirectIORead   = "direct_io_read"
 
+	// 随机 I/O 测试方法与落盘验证。旧样本缺少这些字段，存在稀疏文件空洞读问题。
+	ExtraRandomIOMethod        = "random_io_method"
+	ExtraRandomIODeviceCheck   = "device_check"
+	ExtraRandomIODeviceReadOps = "device_read_ops"
+	ExtraRandomIOReads         = "random_reads"
+	ExtraRandomIOWrites        = "random_writes"
+	ExtraReadP50MS             = "read_p50_ms"
+	ExtraReadP99MS             = "read_p99_ms"
+	ExtraWriteP50MS            = "write_p50_ms"
+	ExtraWriteP99MS            = "write_p99_ms"
+
 	ExtraTotalKB          = "total_kb"
 	ExtraAvailableKB      = "available_kb"
 	ExtraAvailablePercent = "available_percent"
@@ -86,6 +97,33 @@ func NewRandomIOExtra(writeLatencyMS, readLatencyMS float64, directIOWrite, dire
 		ExtraDirectIOWrite:  directIOWrite,
 		ExtraDirectIORead:   directIORead,
 	}
+}
+
+// RandomIODetails 是随机 I/O 测试的分布与落盘验证信息。
+type RandomIODetails struct {
+	Method        string
+	DeviceCheck   string
+	DeviceReadOps uint64
+	Reads         int
+	Writes        int
+	ReadP50MS     float64
+	ReadP99MS     float64
+	WriteP50MS    float64
+	WriteP99MS    float64
+}
+
+func NewRandomIODetailExtra(writeLatencyMS, readLatencyMS float64, directIOWrite, directIORead bool, details RandomIODetails) Extra {
+	extra := NewRandomIOExtra(writeLatencyMS, readLatencyMS, directIOWrite, directIORead)
+	extra[ExtraRandomIOMethod] = details.Method
+	extra[ExtraRandomIODeviceCheck] = details.DeviceCheck
+	extra[ExtraRandomIODeviceReadOps] = details.DeviceReadOps
+	extra[ExtraRandomIOReads] = details.Reads
+	extra[ExtraRandomIOWrites] = details.Writes
+	extra[ExtraReadP50MS] = details.ReadP50MS
+	extra[ExtraReadP99MS] = details.ReadP99MS
+	extra[ExtraWriteP50MS] = details.WriteP50MS
+	extra[ExtraWriteP99MS] = details.WriteP99MS
+	return extra
 }
 
 func NewMemoryExtra(totalKB, availableKB uint64, availablePercent, swapUsage float64) Extra {

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Catker/chaoleme/collector"
 	"github.com/Catker/chaoleme/storage"
 )
 
@@ -143,6 +144,22 @@ func calculatePressurePercents(metrics []*storage.Metric) []float64 {
 		return percents
 	}
 	return extractValues(metrics)
+}
+
+// isTrustedRandomIOSample 判断随机 I/O 样本能否代表真实磁盘延迟：
+// 必须是预写文件方法（旧方法的读多半落在稀疏空洞上）、读写都使用 O_DIRECT，
+// 且没有被 diskstats 证明读请求未到达块设备。无法验证设备时仍视为可信。
+func isTrustedRandomIOSample(m *storage.Metric) bool {
+	directWrite, hasDirectWrite := extraBool(m, storage.ExtraDirectIOWrite)
+	directRead, hasDirectRead := extraBool(m, storage.ExtraDirectIORead)
+	if !hasDirectWrite || !hasDirectRead || !directWrite || !directRead {
+		return false
+	}
+	if method, _ := extraString(m, storage.ExtraRandomIOMethod); method != collector.RandomIOMethodPrefilled {
+		return false
+	}
+	check, _ := extraString(m, storage.ExtraRandomIODeviceCheck)
+	return check != collector.RandomIODeviceNotReached
 }
 
 func calculateDiskBusyPercents(metrics []*storage.Metric) []float64 {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestShouldSkipDiskDeviceKeepsWholeNVMeAndMMCDevices(t *testing.T) {
@@ -143,4 +144,112 @@ func useDiskStatsFixture(t *testing.T, mountInfo, diskStats string) {
 	t.Cleanup(func() {
 		procSelfMountinfoPath, procDiskstatsPath = oldMountInfoPath, oldDiskStatsPath
 	})
+}
+
+func TestTestRandomIOPrefillsAndReusesFile(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDiskCollectorWithRandomIO(1, RandomIOOptions{Dir: dir, FileMB: 1, Reads: 16, Writes: 4})
+
+	result, err := d.TestRandomIO()
+	if err != nil {
+		t.Fatalf("随机 IO 测试失败: %v", err)
+	}
+	if result.Reads != 16 || result.Writes != 4 {
+		t.Fatalf("读写次数不符合配置: %+v", result)
+	}
+	if result.ReadP99Ms < result.ReadP50Ms || result.WriteP99Ms < result.WriteP50Ms {
+		t.Fatalf("分位数应单调: %+v", result)
+	}
+
+	path := filepath.Join(dir, randomIOFileName)
+	info, err := os.Stat(path)
+	if err != nil || info.Size() != 1024*1024 {
+		t.Fatalf("预写文件应写满配置大小: info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("不应残留临时文件: %v", err)
+	}
+
+	if _, err := d.TestRandomIO(); err != nil {
+		t.Fatalf("第二次随机 IO 测试失败: %v", err)
+	}
+	// 重建会经过临时文件重命名而更换 inode，SameFile 为真说明复用了原文件。
+	info2, err := os.Stat(path)
+	if err != nil || !os.SameFile(info, info2) {
+		t.Fatalf("大小正确时应复用预写文件: before=%v after=%v", info, info2)
+	}
+}
+
+func TestEnsureRandomIOFileRecreatesWrongSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), randomIOFileName)
+	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+		t.Fatalf("写入旧文件失败: %v", err)
+	}
+	if err := ensureRandomIOFile(path, 2*randomIOBlockSize); err != nil {
+		t.Fatalf("重建预写文件失败: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() != 2*randomIOBlockSize {
+		t.Fatalf("大小不符时应重建: info=%v err=%v", info, err)
+	}
+}
+
+func TestVerifyDeviceReads(t *testing.T) {
+	t.Parallel()
+
+	before := &DiskStats{DeviceName: "vda1", ReadOps: 1000}
+	tests := []struct {
+		name      string
+		after     *DiskStats
+		err       error
+		wantCheck string
+		wantDelta uint64
+	}{
+		{name: "reached", after: &DiskStats{DeviceName: "vda1", ReadOps: 1130}, wantCheck: RandomIODeviceVerified, wantDelta: 130},
+		{name: "absorbed by cache or holes", after: &DiskStats{DeviceName: "vda1", ReadOps: 1010}, wantCheck: RandomIODeviceNotReached, wantDelta: 10},
+		{name: "device changed", after: &DiskStats{DeviceName: "vdb1", ReadOps: 2000}, wantCheck: RandomIODeviceUnknown},
+		{name: "stats unavailable", err: os.ErrNotExist, wantCheck: RandomIODeviceUnknown},
+	}
+	for _, tt := range tests {
+		check, delta := verifyDeviceReads(before, tt.after, nil, tt.err, 128)
+		if check != tt.wantCheck || delta != tt.wantDelta {
+			t.Fatalf("%s: check=%s delta=%d, want %s/%d", tt.name, check, delta, tt.wantCheck, tt.wantDelta)
+		}
+	}
+}
+
+func TestPercentileMsUsesNearestRank(t *testing.T) {
+	t.Parallel()
+
+	latencies := []time.Duration{4 * time.Millisecond, 1 * time.Millisecond, 3 * time.Millisecond, 2 * time.Millisecond}
+	if got := percentileMs(latencies, 50); got != 2 {
+		t.Fatalf("P50 期望 2ms，实际=%.2f", got)
+	}
+	if got := percentileMs(latencies, 99); got != 4 {
+		t.Fatalf("P99 期望 4ms，实际=%.2f", got)
+	}
+	if got := meanMs(latencies); got != 2.5 {
+		t.Fatalf("均值期望 2.5ms，实际=%.2f", got)
+	}
+}
+
+func TestEnsureRandomIOFileRecreatesInaccessibleFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 可忽略文件权限")
+	}
+	path := filepath.Join(t.TempDir(), randomIOFileName)
+	if err := ensureRandomIOFile(path, randomIOBlockSize); err != nil {
+		t.Fatalf("创建预写文件失败: %v", err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatalf("修改权限失败: %v", err)
+	}
+	if err := ensureRandomIOFile(path, randomIOBlockSize); err != nil {
+		t.Fatalf("不可读写的预写文件应被重建: %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("重建后应可读写: %v", err)
+	}
+	file.Close()
 }

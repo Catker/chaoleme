@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Catker/chaoleme/collector"
 	"github.com/Catker/chaoleme/storage"
 )
 
@@ -195,5 +196,62 @@ func TestCalculatePressurePercentsFallsBackToAvg10ForLegacySamples(t *testing.T)
 	percents := calculatePressurePercents(metrics)
 	if len(percents) != 2 || percents[0] != 12 || percents[1] != 8 {
 		t.Fatalf("缺少 total 的旧样本应回退到 avg10，实际=%v", percents)
+	}
+}
+
+func TestIsTrustedRandomIOSample(t *testing.T) {
+	t.Parallel()
+
+	prefilled := func(check string) map[string]interface{} {
+		return storage.NewRandomIODetailExtra(1, 1, true, true, storage.RandomIODetails{
+			Method:      collector.RandomIOMethodPrefilled,
+			DeviceCheck: check,
+		})
+	}
+	tests := []struct {
+		name  string
+		extra map[string]interface{}
+		want  bool
+	}{
+		{name: "verified", extra: prefilled(collector.RandomIODeviceVerified), want: true},
+		{name: "device unknown", extra: prefilled(collector.RandomIODeviceUnknown), want: true},
+		{name: "not reached device", extra: prefilled(collector.RandomIODeviceNotReached), want: false},
+		{name: "legacy sparse file method", extra: storage.NewRandomIOExtra(1, 1, true, true), want: false},
+		{name: "no direct io", extra: storage.NewRandomIODetailExtra(1, 1, true, false, storage.RandomIODetails{
+			Method:      collector.RandomIOMethodPrefilled,
+			DeviceCheck: collector.RandomIODeviceVerified,
+		}), want: false},
+	}
+	for _, tt := range tests {
+		if got := isTrustedRandomIOSample(&storage.Metric{Extra: tt.extra}); got != tt.want {
+			t.Fatalf("%s: got=%t want=%t", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestAnalyzePeriodUsesOnlyTrustedRandomIOSamples(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	start := time.Now().Add(-time.Hour)
+	// 旧方法样本：空洞读导致读延迟极低。
+	saveMetric(t, store, start.Add(5*time.Minute), storage.MetricTypeRandomIO, 1, storage.NewRandomIOExtra(1, 0.01, true, true))
+	saveMetric(t, store, start.Add(20*time.Minute), storage.MetricTypeRandomIO, 20, storage.NewRandomIODetailExtra(20, 10, true, true, storage.RandomIODetails{
+		Method:      collector.RandomIOMethodPrefilled,
+		DeviceCheck: collector.RandomIODeviceVerified,
+	}))
+
+	stats, err := NewAnalyzer(store).AnalyzePeriod("daily", start, start.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if stats.RandomIOSamples != 2 || stats.RandomIODirectIOSamples != 1 {
+		t.Fatalf("样本计数不符合预期: total=%d trusted=%d", stats.RandomIOSamples, stats.RandomIODirectIOSamples)
+	}
+	if stats.RandomIOReadAvg != 10 || stats.RandomIOWriteAvg != 20 || stats.RandomIOP95 != 20 {
+		t.Fatalf("有可信样本时应只用可信样本: read=%.2f write=%.2f p95=%.2f", stats.RandomIOReadAvg, stats.RandomIOWriteAvg, stats.RandomIOP95)
+	}
+	if stats.StorageType != collector.StorageTypeHDD {
+		t.Fatalf("应按可信样本推断存储类型，实际=%s", stats.StorageType)
 	}
 }

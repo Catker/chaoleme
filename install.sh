@@ -171,7 +171,10 @@ collect:
   cpu_steal_interval: "5m"
   cpu_bench_interval: "30m"
   io_test_interval: "15m"
-  io_test_size_mb: 4
+  io_test_size_mb: 1
+  random_io_file_mb: 64
+  random_io_reads: 128
+  random_io_writes: 32
 
 # AI 配置支持热重载：修改后会在下一次生成报告时自动生效
 ai:

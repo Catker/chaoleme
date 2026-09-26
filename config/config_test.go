@@ -148,6 +148,27 @@ func TestValidateRejectsInvalidCollectValuesInFixedOrder(t *testing.T) {
 			wantError: "io_test_size_mb 必须大于 0",
 		},
 		{
+			name: "random io file too large",
+			configure: func(cfg *Config) {
+				cfg.Collect.RandomIOFileMB = 5000
+			},
+			wantError: "random_io_file_mb 必须在 1-4096 之间",
+		},
+		{
+			name: "random io reads zero",
+			configure: func(cfg *Config) {
+				cfg.Collect.RandomIOReads = 0
+			},
+			wantError: "random_io_reads 必须在 1-10000 之间",
+		},
+		{
+			name: "random io writes negative",
+			configure: func(cfg *Config) {
+				cfg.Collect.RandomIOWrites = -1
+			},
+			wantError: "random_io_writes 必须在 1-10000 之间",
+		},
+		{
 			name: "first invalid interval wins",
 			configure: func(cfg *Config) {
 				cfg.Collect.CPUStealInterval = "0s"

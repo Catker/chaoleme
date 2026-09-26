@@ -85,7 +85,7 @@ type PeriodStats struct {
 	RandomIOWriteAvg float64
 	RandomIOReadAvg  float64
 	RandomIOP95      float64
-	// O_DIRECT 可用时，随机 I/O 延迟更接近真实磁盘延迟。
+	// 可信样本：预写文件方法 + O_DIRECT，且未被 diskstats 证明读请求没有到达块设备。
 	RandomIODirectIOSamples int
 
 	// 磁盘繁忙度统计
@@ -297,40 +297,40 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		stats.IOPressureSomeP95 = percentile(values, 95)
 	}
 
-	// 计算随机 IO 统计
+	// 计算随机 IO 统计。有可信样本时只用可信样本，避免旧方法或未落盘的样本拉低延迟。
 	randomIOMetrics := a.queryRegularMetrics(stats, storage.MetricTypeRandomIO, start, end)
 	stats.RandomIOSamples = len(randomIOMetrics)
 	if len(randomIOMetrics) > 0 {
-		var writeLatencies, readLatencies, directWriteLatencies []float64
+		var writeLatencies, readLatencies, trustedWriteLatencies, trustedReadLatencies []float64
 		for _, m := range randomIOMetrics {
-			if m.Extra != nil {
-				if wl, ok := m.Extra[storage.ExtraWriteLatencyMS].(float64); ok {
-					writeLatencies = append(writeLatencies, wl)
-				}
-				if rl, ok := m.Extra[storage.ExtraReadLatencyMS].(float64); ok {
-					readLatencies = append(readLatencies, rl)
-				}
-				directWrite, hasDirectWrite := extraBool(m, storage.ExtraDirectIOWrite)
-				directRead, hasDirectRead := extraBool(m, storage.ExtraDirectIORead)
-				if hasDirectWrite && hasDirectRead && directWrite && directRead {
-					stats.RandomIODirectIOSamples++
-					if wl, ok := m.Extra[storage.ExtraWriteLatencyMS].(float64); ok {
-						directWriteLatencies = append(directWriteLatencies, wl)
-					}
-				}
+			wl, hasWrite := extraFloat(m, storage.ExtraWriteLatencyMS)
+			rl, hasRead := extraFloat(m, storage.ExtraReadLatencyMS)
+			if hasWrite {
+				writeLatencies = append(writeLatencies, wl)
 			}
+			if hasRead {
+				readLatencies = append(readLatencies, rl)
+			}
+			if !isTrustedRandomIOSample(m) {
+				continue
+			}
+			stats.RandomIODirectIOSamples++
+			if hasWrite {
+				trustedWriteLatencies = append(trustedWriteLatencies, wl)
+			}
+			if hasRead {
+				trustedReadLatencies = append(trustedReadLatencies, rl)
+			}
+		}
+		if stats.RandomIODirectIOSamples > 0 {
+			writeLatencies, readLatencies = trustedWriteLatencies, trustedReadLatencies
 		}
 		if len(writeLatencies) > 0 {
 			stats.RandomIOWriteAvg = avg(writeLatencies)
+			stats.RandomIOP95 = percentile(writeLatencies, 95)
 		}
 		if len(readLatencies) > 0 {
 			stats.RandomIOReadAvg = avg(readLatencies)
-		}
-		// P95 优先使用 O_DIRECT 写延迟，避免页缓存回退样本误导判定。
-		if len(directWriteLatencies) > 0 {
-			stats.RandomIOP95 = percentile(directWriteLatencies, 95)
-		} else if len(writeLatencies) > 0 {
-			stats.RandomIOP95 = percentile(writeLatencies, 95)
 		}
 
 		// 根据平均随机读延迟推断存储类型（比读取 /sys/block 更可靠）

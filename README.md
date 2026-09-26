@@ -83,7 +83,10 @@ collect:
   cpu_steal_interval: "5m"   # CPU Steal 采集间隔
   cpu_bench_interval: "30m"  # CPU 基准测试间隔
   io_test_interval: "15m"    # I/O 延迟测试间隔
-  io_test_size_mb: 4         # I/O 测试文件大小
+  io_test_size_mb: 1         # 顺序写测试大小 (MB)
+  random_io_file_mb: 64      # 随机 I/O 预写文件大小 (MB)，常驻在数据目录
+  random_io_reads: 128       # 每次测试的 4KB 随机读次数
+  random_io_writes: 32       # 每次测试的 4KB 随机写次数
   burst_interval: "30s"     # 异常期间的密集采样间隔
   burst_duration: "10m"     # 单次异常密集采样持续时间
 
@@ -253,9 +256,11 @@ CPU Steal 有持续异常，存在资源争抢风险，建议继续观察高峰�
 
 ### 磁盘测试
 
-- **测试目录选择**：自动避开 tmpfs（内存盘），确保测试真实磁盘
-- **O_DIRECT 模式**：4KB 随机读写使用 O_DIRECT 绕过页缓存
-- **O_DIRECT 有效样本**：不可用时随机 I/O 仅作参考，不作为强 I/O 证据
+- **测试目录选择**：顺序写测试自动避开 tmpfs（内存盘），确保测试真实磁盘
+- **预写文件**：随机 I/O 使用数据目录下常驻的 `chaoleme-random-io.dat`（默认 64MB），首次测试时用随机数据写满，之后复用；避免读到稀疏空洞（内核直接填零、不产生磁盘 I/O）或被宿主机按零块压缩
+- **O_DIRECT 模式**：4KB 随机读写使用 O_DIRECT 绕过客户机页缓存，并记录每次测试的 P50/P99
+- **落盘验证**：比较读测试前后 `/proc/diskstats` 的设备读次数，读请求没有到达块设备的样本不参与判定。宿主机侧缓存无法从虚拟机内绕过，预写文件越大越不易命中
+- **可信样本**：只有预写文件方法 + O_DIRECT + 未被证明未落盘的样本才作为 I/O 证据；升级前的旧样本仅作参考
 - **存储类型检测**：自动识别 SSD/HDD 并应用不同评分阈值
 
 ### 环境诊断

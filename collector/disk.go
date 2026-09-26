@@ -3,18 +3,53 @@ package collector
 import (
 	"crypto/rand"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unsafe"
+)
+
+const (
+	randomIOBlockSize = 4096 // 4KB，也是常见的磁盘扇区/页大小
+	randomIOFileName  = "chaoleme-random-io.dat"
+	prefillChunkSize  = 1024 * 1024
+
+	DefaultRandomIOFileMB = 64
+	DefaultRandomIOReads  = 128
+	DefaultRandomIOWrites = 32
+
+	// RandomIOMethodPrefilled 标识使用预写文件的随机 I/O 测试方法。
+	RandomIOMethodPrefilled = "prefilled"
+	// RandomIODeviceVerified 设备读次数增量覆盖了测试读次数，读请求确实下发到块设备。
+	RandomIODeviceVerified = "verified"
+	// RandomIODeviceNotReached 设备读次数增量明显不足，读请求被页缓存或空洞吸收。
+	RandomIODeviceNotReached = "not_reached"
+	// RandomIODeviceUnknown 无法把测试目录映射到块设备，不能验证。
+	RandomIODeviceUnknown = "unknown"
 )
 
 // DiskCollector 磁盘 I/O 采集器
 type DiskCollector struct {
 	testDir  string
 	testSize int // 测试文件大小（字节）
+
+	// 随机 I/O 使用常驻的预写文件，避免每次重建和稀疏空洞。
+	randomIODir      string
+	randomIOFileSize int64
+	randomIOReads    int
+	randomIOWrites   int
+}
+
+// RandomIOOptions 随机 I/O 测试参数
+type RandomIOOptions struct {
+	Dir    string // 预写文件所在目录，应位于持久化的真实磁盘上
+	FileMB int
+	Reads  int
+	Writes int
 }
 
 // isTmpfs 检测指定路径是否挂载为 tmpfs（内存盘）
@@ -73,9 +108,32 @@ func selectTestDir() string {
 func NewDiskCollector(testSizeMB int) *DiskCollector {
 	testDir := selectTestDir()
 	return &DiskCollector{
-		testDir:  testDir,
-		testSize: testSizeMB * 1024 * 1024,
+		testDir:          testDir,
+		testSize:         testSizeMB * 1024 * 1024,
+		randomIODir:      testDir,
+		randomIOFileSize: DefaultRandomIOFileMB * 1024 * 1024,
+		randomIOReads:    DefaultRandomIOReads,
+		randomIOWrites:   DefaultRandomIOWrites,
 	}
+}
+
+// NewDiskCollectorWithRandomIO 创建磁盘采集器，并指定随机 I/O 测试参数。
+// 非正数参数使用默认值；Dir 为空时沿用顺序写测试目录。
+func NewDiskCollectorWithRandomIO(testSizeMB int, opts RandomIOOptions) *DiskCollector {
+	d := NewDiskCollector(testSizeMB)
+	if opts.Dir != "" {
+		d.randomIODir = opts.Dir
+	}
+	if opts.FileMB > 0 {
+		d.randomIOFileSize = int64(opts.FileMB) * 1024 * 1024
+	}
+	if opts.Reads > 0 {
+		d.randomIOReads = opts.Reads
+	}
+	if opts.Writes > 0 {
+		d.randomIOWrites = opts.Writes
+	}
+	return d
 }
 
 // IOLatencyResult I/O 延迟测试结果
@@ -206,7 +264,12 @@ type DiskStats struct {
 // CollectDiskStats 从测试目录所在设备的 /proc/diskstats 条目采集统计。
 // 无法将测试目录可靠映射到单个块设备时，返回错误而不是汇总无关设备。
 func (d *DiskCollector) CollectDiskStats() (*DiskStats, error) {
-	testDir, err := filepath.Abs(filepath.Clean(d.testDir))
+	return collectDiskStatsForDir(d.testDir)
+}
+
+// collectDiskStatsForDir 采集指定目录所在块设备的 /proc/diskstats 条目。
+func collectDiskStatsForDir(dir string) (*DiskStats, error) {
+	testDir, err := filepath.Abs(filepath.Clean(dir))
 	if err != nil {
 		return nil, fmt.Errorf("解析测试目录失败: %w", err)
 	}
@@ -432,10 +495,18 @@ func parseUint64(s string) (uint64, error) {
 
 // RandomIOResult 随机读写测试结果
 type RandomIOResult struct {
-	RandomWriteLatencyMs float64 // 4KB 随机写延迟
-	RandomReadLatencyMs  float64 // 4KB 随机读延迟
-	DirectIOWrite        bool    // 写测试是否成功使用 O_DIRECT
-	DirectIORead         bool    // 读测试是否成功使用 O_DIRECT
+	RandomWriteLatencyMs float64 // 4KB 随机写平均延迟
+	RandomReadLatencyMs  float64 // 4KB 随机读平均延迟
+	WriteP50Ms           float64
+	WriteP99Ms           float64
+	ReadP50Ms            float64
+	ReadP99Ms            float64
+	Writes               int
+	Reads                int
+	DirectIOWrite        bool   // 写测试是否成功使用 O_DIRECT
+	DirectIORead         bool   // 读测试是否成功使用 O_DIRECT
+	DeviceCheck          string // 读请求是否确实下发到块设备
+	DeviceReadOps        uint64 // 读测试期间块设备读完成次数增量
 }
 
 // alignedBuffer 创建满足 O_DIRECT 地址要求的缓冲区。
@@ -451,101 +522,203 @@ func alignedBuffer(size, alignment int) []byte {
 	return buf[offset : offset+size]
 }
 
-// TestRandomIO 执行 4KB 随机读写测试
-// 使用 O_DIRECT 绕过页缓存，测量真实磁盘延迟
+// TestRandomIO 执行 4KB 随机读写测试。
+// 使用常驻且预先写满随机数据的文件：读请求不会落在稀疏空洞上（空洞读由内核直接填零，不产生磁盘 I/O），
+// 随机数据也避免被宿主机按零块压缩或去重。O_DIRECT 绕过客户机页缓存，
+// 并用 /proc/diskstats 读次数增量验证读请求确实下发到了块设备。
+// 注意：宿主机侧缓存无法从虚拟机内绕过，预写文件越大，命中宿主机缓存的概率越低。
 func (d *DiskCollector) TestRandomIO() (*RandomIOResult, error) {
-	const (
-		blockSize   = 4096 // 4KB，也是常见的磁盘扇区/页大小
-		testBlocks  = 64
-		sampleCount = 8
-	)
+	path := filepath.Join(d.randomIODir, randomIOFileName)
+	if err := ensureRandomIOFile(path, d.randomIOFileSize); err != nil {
+		return nil, err
+	}
+	blocks := int(d.randomIOFileSize / randomIOBlockSize)
 
-	// 创建满足 O_DIRECT 要求的写入缓冲区。
-	writeData := alignedBuffer(blockSize, blockSize)
+	// ========== 随机写（覆盖写已分配块，不触发块分配） ==========
+	writeData := alignedBuffer(randomIOBlockSize, randomIOBlockSize)
 	if _, err := rand.Read(writeData); err != nil {
 		return nil, fmt.Errorf("生成随机数据失败: %w", err)
 	}
-
-	// 创建临时文件路径
-	tmpFile := filepath.Join(d.testDir, fmt.Sprintf("chaoleme-random-io-%d", time.Now().UnixNano()))
-	defer os.Remove(tmpFile)
-
-	// ========== 测试随机写入（使用 O_DIRECT） ==========
-	directIOWrite := directIOFlag != 0
-	writeFile, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC|directIOFlag, 0600)
+	writeFile, directIOWrite, err := openWithDirectIO(path, os.O_WRONLY)
 	if err != nil {
-		// O_DIRECT 不支持时，回退到普通模式
-		directIOWrite = false
-		writeFile, err = os.OpenFile(tmpFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
-		if err != nil {
-			return nil, fmt.Errorf("创建测试文件失败: %w", err)
-		}
+		return nil, fmt.Errorf("打开随机 IO 测试文件失败: %w", err)
 	}
-
-	if err := writeFile.Truncate(int64(blockSize * testBlocks)); err != nil {
+	writeLatencies, err := timeRandomBlockOps(d.randomIOWrites, blocks, func(offset int64) error {
+		_, err := writeFile.WriteAt(writeData, offset)
+		return err
+	})
+	if err != nil {
 		writeFile.Close()
-		return nil, fmt.Errorf("初始化随机 IO 测试文件失败: %w", err)
+		return nil, fmt.Errorf("随机写入测试数据失败: %w", err)
 	}
-
-	var writeLatency time.Duration
-	for i := 0; i < sampleCount; i++ {
-		offset, err := randomBlockOffset(testBlocks, blockSize)
-		if err != nil {
-			writeFile.Close()
-			return nil, err
-		}
-		writeStart := time.Now()
-		if _, err := writeFile.WriteAt(writeData, offset); err != nil {
-			writeFile.Close()
-			return nil, fmt.Errorf("随机写入测试数据失败: %w", err)
-		}
-		writeLatency += time.Since(writeStart)
-	}
-
-	// O_DIRECT 模式绕过页缓存，但仍调用 Sync 确保元数据同步。
+	// O_DIRECT 模式绕过页缓存，但仍调用 Sync 确保数据与元数据落盘。
 	err = writeFile.Sync()
 	writeFile.Close()
 	if err != nil {
 		return nil, fmt.Errorf("fsync 失败: %w", err)
 	}
 
-	// ========== 测试随机读取（使用 O_DIRECT 绕过页缓存） ==========
-	// 创建满足 O_DIRECT 要求的读取缓冲区。
-	readData := alignedBuffer(blockSize, blockSize)
-
-	directIORead := directIOFlag != 0
-	readFile, err := os.OpenFile(tmpFile, os.O_RDONLY|directIOFlag, 0)
+	// ========== 随机读（O_DIRECT，并用 diskstats 验证落盘） ==========
+	readData := alignedBuffer(randomIOBlockSize, randomIOBlockSize)
+	readFile, directIORead, err := openWithDirectIO(path, os.O_RDONLY)
 	if err != nil {
-		// O_DIRECT 不支持时，回退到普通模式（此时读取会命中缓存）
-		directIORead = false
-		readFile, err = os.OpenFile(tmpFile, os.O_RDONLY, 0)
-		if err != nil {
-			return nil, fmt.Errorf("打开测试文件读取失败: %w", err)
-		}
+		return nil, fmt.Errorf("打开随机 IO 测试文件读取失败: %w", err)
 	}
-
-	var readLatency time.Duration
-	for i := 0; i < sampleCount; i++ {
-		offset, err := randomBlockOffset(testBlocks, blockSize)
-		if err != nil {
-			readFile.Close()
-			return nil, err
-		}
-		readStart := time.Now()
-		if _, err := readFile.ReadAt(readData, offset); err != nil {
-			readFile.Close()
-			return nil, fmt.Errorf("随机读取测试数据失败: %w", err)
-		}
-		readLatency += time.Since(readStart)
-	}
+	before, beforeErr := collectDiskStatsForDir(d.randomIODir)
+	readLatencies, err := timeRandomBlockOps(d.randomIOReads, blocks, func(offset int64) error {
+		_, err := readFile.ReadAt(readData, offset)
+		return err
+	})
 	readFile.Close()
+	if err != nil {
+		return nil, fmt.Errorf("随机读取测试数据失败: %w", err)
+	}
+	after, afterErr := collectDiskStatsForDir(d.randomIODir)
+	deviceCheck, deviceReadOps := verifyDeviceReads(before, after, beforeErr, afterErr, d.randomIOReads)
 
 	return &RandomIOResult{
-		RandomWriteLatencyMs: float64(writeLatency.Microseconds()) / 1000.0 / sampleCount,
-		RandomReadLatencyMs:  float64(readLatency.Microseconds()) / 1000.0 / sampleCount,
+		RandomWriteLatencyMs: meanMs(writeLatencies),
+		RandomReadLatencyMs:  meanMs(readLatencies),
+		WriteP50Ms:           percentileMs(writeLatencies, 50),
+		WriteP99Ms:           percentileMs(writeLatencies, 99),
+		ReadP50Ms:            percentileMs(readLatencies, 50),
+		ReadP99Ms:            percentileMs(readLatencies, 99),
+		Writes:               len(writeLatencies),
+		Reads:                len(readLatencies),
 		DirectIOWrite:        directIOWrite,
 		DirectIORead:         directIORead,
+		DeviceCheck:          deviceCheck,
+		DeviceReadOps:        deviceReadOps,
 	}, nil
+}
+
+// ensureRandomIOFile 确保预写文件存在且大小正确；否则用随机数据重新写满。
+// 先写临时文件再重命名，避免中断后留下未写满（含空洞）的测试文件。
+func ensureRandomIOFile(path string, size int64) error {
+	if size < randomIOBlockSize {
+		return fmt.Errorf("随机 IO 测试文件过小: %d 字节", size)
+	}
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() == size {
+		// 例如以 root 手动运行后留下 0600 的文件，服务用户无法读写时删除重建（目录属于服务用户即可删除）。
+		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err == nil {
+			return file.Close()
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("随机 IO 测试文件不可读写且无法删除: %w", err)
+		}
+	}
+
+	tmpPath := path + ".tmp"
+	file, _, err := openWithDirectIO(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
+	if err != nil {
+		return fmt.Errorf("创建随机 IO 测试文件失败: %w", err)
+	}
+	// O_DIRECT 写入不会把 64MB 数据留在页缓存里。
+	chunk := alignedBuffer(prefillChunkSize, randomIOBlockSize)
+	for written := int64(0); written < size; {
+		n := int64(len(chunk))
+		if remaining := size - written; remaining < n {
+			n = remaining
+		}
+		if _, err := rand.Read(chunk[:n]); err != nil {
+			file.Close()
+			os.Remove(tmpPath)
+			return fmt.Errorf("生成随机数据失败: %w", err)
+		}
+		if _, err := file.WriteAt(chunk[:n], written); err != nil {
+			file.Close()
+			os.Remove(tmpPath)
+			return fmt.Errorf("预写随机 IO 测试文件失败: %w", err)
+		}
+		written += n
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("fsync 随机 IO 测试文件失败: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("关闭随机 IO 测试文件失败: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("重命名随机 IO 测试文件失败: %w", err)
+	}
+	return nil
+}
+
+// openWithDirectIO 优先以 O_DIRECT 打开文件，不支持时回退普通模式。
+func openWithDirectIO(path string, flag int) (*os.File, bool, error) {
+	if directIOFlag != 0 {
+		if file, err := os.OpenFile(path, flag|directIOFlag, 0600); err == nil {
+			return file, true, nil
+		}
+	}
+	file, err := os.OpenFile(path, flag, 0600)
+	return file, false, err
+}
+
+// timeRandomBlockOps 对随机块偏移逐个执行操作并记录每次耗时（QD1）。
+func timeRandomBlockOps(count, blocks int, op func(offset int64) error) ([]time.Duration, error) {
+	latencies := make([]time.Duration, 0, count)
+	for i := 0; i < count; i++ {
+		offset, err := randomBlockOffset(blocks, randomIOBlockSize)
+		if err != nil {
+			return nil, err
+		}
+		start := time.Now()
+		if err := op(offset); err != nil {
+			return nil, err
+		}
+		latencies = append(latencies, time.Since(start))
+	}
+	return latencies, nil
+}
+
+// verifyDeviceReads 用读测试前后的设备读完成次数判断读请求是否下发到块设备。
+// 其他进程的读只会让增量偏大，所以增量明显不足可以证明测试读被缓存或空洞吸收；
+// 增量充足只能说明客户机侧没有吸收，宿主机缓存仍可能命中。
+func verifyDeviceReads(before, after *DiskStats, beforeErr, afterErr error, reads int) (string, uint64) {
+	if beforeErr != nil || afterErr != nil || before == nil || after == nil || before.DeviceName != after.DeviceName || after.ReadOps < before.ReadOps {
+		return RandomIODeviceUnknown, 0
+	}
+	delta := after.ReadOps - before.ReadOps
+	// 留 10% 余量，兼容少量请求合并。
+	if float64(delta) < float64(reads)*0.9 {
+		return RandomIODeviceNotReached, delta
+	}
+	return RandomIODeviceVerified, delta
+}
+
+func meanMs(latencies []time.Duration) float64 {
+	if len(latencies) == 0 {
+		return 0
+	}
+	var total time.Duration
+	for _, latency := range latencies {
+		total += latency
+	}
+	return durationMs(total) / float64(len(latencies))
+}
+
+// percentileMs 使用最近秩法计算分位数，样本较少时 P99 即最大值。
+func percentileMs(latencies []time.Duration, p float64) float64 {
+	if len(latencies) == 0 {
+		return 0
+	}
+	sorted := append([]time.Duration(nil), latencies...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	rank := int(math.Ceil(p / 100 * float64(len(sorted))))
+	if rank < 1 {
+		rank = 1
+	}
+	return durationMs(sorted[rank-1])
+}
+
+func durationMs(d time.Duration) float64 {
+	return float64(d.Microseconds()) / 1000.0
 }
 
 func randomBlockOffset(blocks, blockSize int) (int64, error) {

@@ -240,10 +240,27 @@ func collectIOMemoryDiskMetrics(disk *collector.DiskCollector, mem *collector.Me
 			Timestamp: now,
 			Type:      storage.MetricTypeRandomIO,
 			Value:     result.RandomWriteLatencyMs,
-			Extra:     storage.WithSamplingMode(storage.NewRandomIOExtra(result.RandomWriteLatencyMs, result.RandomReadLatencyMs, result.DirectIOWrite, result.DirectIORead), storage.SamplingModeRegular),
+			Extra: storage.WithSamplingMode(storage.NewRandomIODetailExtra(
+				result.RandomWriteLatencyMs,
+				result.RandomReadLatencyMs,
+				result.DirectIOWrite,
+				result.DirectIORead,
+				storage.RandomIODetails{
+					Method:        collector.RandomIOMethodPrefilled,
+					DeviceCheck:   result.DeviceCheck,
+					DeviceReadOps: result.DeviceReadOps,
+					Reads:         result.Reads,
+					Writes:        result.Writes,
+					ReadP50MS:     result.ReadP50Ms,
+					ReadP99MS:     result.ReadP99Ms,
+					WriteP50MS:    result.WriteP50Ms,
+					WriteP99MS:    result.WriteP99Ms,
+				},
+			), storage.SamplingModeRegular),
 		})
-		log.Printf("Random I/O: Write=%.2fms, Read=%.2fms, DirectIO=%t/%t",
-			result.RandomWriteLatencyMs, result.RandomReadLatencyMs, result.DirectIOWrite, result.DirectIORead)
+		log.Printf("Random I/O: Write avg=%.2fms p99=%.2fms, Read avg=%.2fms p99=%.2fms, DirectIO=%t/%t, device=%s(%d/%d)",
+			result.RandomWriteLatencyMs, result.WriteP99Ms, result.RandomReadLatencyMs, result.ReadP99Ms,
+			result.DirectIOWrite, result.DirectIORead, result.DeviceCheck, result.DeviceReadOps, result.Reads)
 	} else {
 		log.Printf("随机 I/O 测试失败: %v", err)
 	}
