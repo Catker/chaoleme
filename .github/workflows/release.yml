@@ -35,37 +35,17 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Install cross-compilation tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf gcc-i686-linux-gnu
-
       - name: Build binary
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: 1
+          # modernc.org/sqlite 是纯 Go 实现，无需 CGO；产物为静态二进制
+          CGO_ENABLED: 0
+          GOARM: ${{ matrix.arch == 'arm' && '7' || '' }}
         run: |
-          # 设置交叉编译器
-          case "${{ matrix.arch }}" in
-            amd64)
-              export CC=gcc
-              ;;
-            arm64)
-              export CC=aarch64-linux-gnu-gcc
-              ;;
-            386)
-              export CC=i686-linux-gnu-gcc
-              ;;
-            arm)
-              export CC=arm-linux-gnueabihf-gcc
-              export GOARM=7
-              ;;
-          esac
-          
           # 去掉 tag 的 v 前缀
           VERSION=${GITHUB_REF_NAME#v}
-          go build -ldflags="-s -w -X main.Version=${VERSION}" \
+          go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" \
             -o chaoleme-${{ matrix.os }}-${{ matrix.arch }} .
 
       - name: Upload artifact

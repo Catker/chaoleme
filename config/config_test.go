@@ -214,6 +214,67 @@ func TestLoadAIValidatesAPIKeyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestValidateReportSchedule(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		wantError string
+	}{
+		{
+			// 守护进程总会解析 daily_time，日报关闭时写错也会导致启动失败。
+			name: "invalid daily time with daily disabled",
+			configure: func(cfg *Config) {
+				cfg.Report.Daily = false
+				cfg.Report.DailyTime = "9点"
+			},
+			wantError: "daily_time 格式无效",
+		},
+		{
+			name: "weekly day out of range",
+			configure: func(cfg *Config) {
+				cfg.Report.WeeklyDay = 7
+			},
+			wantError: "weekly_day 必须在 0-6 之间",
+		},
+		{
+			name: "monthly day missing in short months",
+			configure: func(cfg *Config) {
+				cfg.Report.MonthlyDay = 31
+			},
+			wantError: "monthly_day 必须在 1-28 之间",
+		},
+		{
+			name: "disabled monthly report skips day check",
+			configure: func(cfg *Config) {
+				cfg.Report.Monthly = false
+				cfg.Report.MonthlyDay = 31
+				cfg.Storage.RetentionDays = 35
+			},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validTestConfig()
+			tt.configure(cfg)
+
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("不应报错: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("错误不符合预期: got=%v want contains %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func validTestConfig() *Config {
 	cfg := DefaultConfig()
 	cfg.Telegram.BotToken = "test-token"

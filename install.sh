@@ -196,6 +196,8 @@ EOF
     # 保存安装路径（用于卸载）
     echo "$INSTALL_DIR" > /etc/chaoleme_install_path
     chown -R "$SERVICE_NAME:$SERVICE_NAME" "$CONFIG_DIR" "$DATA_DIR"
+    # 配置文件包含 bot token 与 API key，仅允许服务用户读写
+    chmod 600 "$CONFIG_DIR/config.yaml"
     
     # 创建 systemd 服务
     echo -e "${YELLOW}创建 systemd 服务...${NC}"

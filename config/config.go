@@ -218,10 +218,19 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("burst_interval 必须小于 burst_duration")
 	}
 
-	// 验证日报时间格式
-	if c.Report.Daily {
-		if _, err := time.Parse("15:04", c.Report.DailyTime); err != nil {
-			return fmt.Errorf("daily_time 格式无效，应为 HH:MM: %s", c.Report.DailyTime)
+	// daily_time 是日报、周报、月报共用的发送时间，守护进程启动时总会解析，因此不论日报是否启用都要校验。
+	if _, err := time.Parse("15:04", c.Report.DailyTime); err != nil {
+		return fmt.Errorf("daily_time 格式无效，应为 HH:MM: %s", c.Report.DailyTime)
+	}
+	if c.Report.Weekly {
+		if err := validateIntRange("weekly_day", c.Report.WeeklyDay, 0, 6); err != nil {
+			return err
+		}
+	}
+	// 超过 28 的日期在短月份不存在，月报会静默不发。
+	if c.Report.Monthly {
+		if err := validateIntRange("monthly_day", c.Report.MonthlyDay, 1, 28); err != nil {
+			return err
 		}
 	}
 

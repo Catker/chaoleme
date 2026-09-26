@@ -237,6 +237,17 @@ start_service() {
     fi
 }
 
+# ========== 修正配置文件权限 ==========
+# 配置文件包含 bot token 与 API key，旧版安装脚本生成的是 644
+secure_config() {
+    local config_file
+    config_file="$(dirname "$INSTALL_DIR")/config/config.yaml"
+    if [[ -f "$config_file" ]]; then
+        chmod 600 "$config_file"
+        log_info "配置文件权限已设为 600: $config_file"
+    fi
+}
+
 # ========== 安装新版本 ==========
 install_binary() {
     local tmp_dir="$1"
@@ -259,6 +270,7 @@ install_binary() {
         return 1
     fi
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
+    secure_config
     
     start_service
     
