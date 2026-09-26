@@ -1,5 +1,7 @@
 package analyzer
 
+import "time"
+
 type RiskLevel string
 
 const (
@@ -60,3 +62,15 @@ const (
 	OversellLikely       OversellVerdict = "likely"
 	OversellLocalLoad    OversellVerdict = "local_load"
 )
+
+// ContentionEvent 表示报告周期内连续出现的原始资源争抢样本。
+// 它仅用于展示，不参与超售结论。
+type ContentionEvent struct {
+	Type                string    `json:"type"`
+	StartTime           time.Time `json:"start_time"`
+	EndTime             time.Time `json:"end_time"`
+	SampleCount         int       `json:"sample_count"`
+	PeakPercent         float64   `json:"peak_percent"`
+	SynchronizedSamples int       `json:"synchronized_samples"`
+	Correlation         string    `json:"correlation"`
+}

@@ -8,6 +8,100 @@ import (
 	"github.com/Catker/chaoleme/storage"
 )
 
+const (
+	defaultContentionSampleInterval = 5 * time.Minute
+	contentionEventGapMultiplier    = 3
+)
+
+// filterRegularMetrics 保留常规采样以及未标记采样模式的历史数据。
+func filterRegularMetrics(metrics []*storage.Metric) []*storage.Metric {
+	filtered := make([]*storage.Metric, 0, len(metrics))
+	for _, metric := range metrics {
+		if !isBurstMetric(metric) {
+			filtered = append(filtered, metric)
+		}
+	}
+	return filtered
+}
+
+func isBurstMetric(metric *storage.Metric) bool {
+	mode, ok := extraString(metric, storage.ExtraSamplingMode)
+	return ok && mode == storage.SamplingModeBurst
+}
+
+func detectContentionEvents(eventType string, threshold float64, metrics []*storage.Metric) []ContentionEvent {
+	sorted := append([]*storage.Metric(nil), metrics...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+	})
+	maxGap := contentionEventMaxGap(sorted)
+
+	var events []ContentionEvent
+	var current *ContentionEvent
+	for _, metric := range sorted {
+		if metric.Value < threshold {
+			if current != nil && current.SampleCount >= 2 {
+				events = append(events, *current)
+			}
+			current = nil
+			continue
+		}
+		if current == nil || metric.Timestamp.Sub(current.EndTime) > maxGap {
+			if current != nil && current.SampleCount >= 2 {
+				events = append(events, *current)
+			}
+			current = &ContentionEvent{Type: eventType, StartTime: metric.Timestamp, EndTime: metric.Timestamp, SampleCount: 1, PeakPercent: metric.Value}
+			continue
+		}
+		current.EndTime = metric.Timestamp
+		current.SampleCount++
+		if metric.Value > current.PeakPercent {
+			current.PeakPercent = metric.Value
+		}
+	}
+	if current != nil && current.SampleCount >= 2 {
+		events = append(events, *current)
+	}
+	return events
+}
+
+func contentionEventMaxGap(metrics []*storage.Metric) time.Duration {
+	var intervals []time.Duration
+	for i := 1; i < len(metrics); i++ {
+		interval := metrics[i].Timestamp.Sub(metrics[i-1].Timestamp)
+		if interval > 0 {
+			intervals = append(intervals, interval)
+		}
+	}
+	if len(intervals) < 2 {
+		return contentionEventGapMultiplier * defaultContentionSampleInterval
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i] < intervals[j] })
+	typicalInterval := intervals[(len(intervals)-1)/2]
+	return typicalInterval * contentionEventGapMultiplier
+}
+
+func diskStatsDevice(metrics []*storage.Metric) (string, string) {
+	if len(metrics) == 0 {
+		return "", "unknown"
+	}
+	var deviceName string
+	for _, metric := range metrics {
+		name, ok := extraString(metric, storage.ExtraDeviceName)
+		if !ok || name == "" {
+			return "", "unknown"
+		}
+		if deviceName == "" {
+			deviceName = name
+			continue
+		}
+		if deviceName != name {
+			return "", "multiple"
+		}
+	}
+	return deviceName, "single"
+}
+
 func calculateCPUThrottlePercents(metrics []*storage.Metric) []float64 {
 	var percents []float64
 	for i := 1; i < len(metrics); i++ {

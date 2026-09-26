@@ -194,6 +194,7 @@ func DetectStorageTypeByLatency(randomReadLatencyMs float64) StorageType {
 
 // DiskStats 系统级磁盘统计（从 /proc/diskstats 采集）
 type DiskStats struct {
+	DeviceName   string // 测试目录所在挂载点对应的块设备名称
 	ReadOps      uint64 // 读操作完成次数
 	WriteOps     uint64 // 写操作完成次数
 	ReadBytes    uint64 // 读取字节数
@@ -202,29 +203,161 @@ type DiskStats struct {
 	WeightedIOMs uint64 // 加权 IO 耗时（反映队列深度）
 }
 
-// CollectDiskStats 从 /proc/diskstats 采集磁盘统计
-// 开销极低：仅读取内核虚拟文件，无实际磁盘 IO
+// CollectDiskStats 从测试目录所在设备的 /proc/diskstats 条目采集统计。
+// 无法将测试目录可靠映射到单个块设备时，返回错误而不是汇总无关设备。
 func (d *DiskCollector) CollectDiskStats() (*DiskStats, error) {
-	data, err := os.ReadFile(procDiskstatsPath)
+	testDir, err := filepath.Abs(filepath.Clean(d.testDir))
+	if err != nil {
+		return nil, fmt.Errorf("解析测试目录失败: %w", err)
+	}
+
+	mountInfo, err := os.ReadFile(procSelfMountinfoPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取 %s 失败: %w", procSelfMountinfoPath, err)
+	}
+	diskStatsData, err := os.ReadFile(procDiskstatsPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取 %s 失败: %w", procDiskstatsPath, err)
 	}
 
-	stats := &DiskStats{}
-	lines := strings.Split(string(data), "\n")
+	mount, err := findTestDirMount(testDir, mountInfo)
+	if err != nil {
+		return nil, err
+	}
+	deviceName, err := diskDeviceName(mount, diskStatsData)
+	if err != nil {
+		return nil, err
+	}
+	return parseDiskStatsForDevice(deviceName, diskStatsData)
+}
 
-	for _, line := range lines {
+type mountInfoEntry struct {
+	root       string
+	mountPoint string
+	fsType     string
+	source     string
+}
+
+func findTestDirMount(testDir string, data []byte) (mountInfoEntry, error) {
+	var selected mountInfoEntry
+	found := false
+
+	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
+		separator := -1
+		for i, field := range fields {
+			if field == "-" {
+				separator = i
+				break
+			}
+		}
+		if separator < 6 || separator+2 >= len(fields) {
+			continue
+		}
+
+		entry := mountInfoEntry{
+			root:       decodeMountinfoPath(fields[3]),
+			mountPoint: filepath.Clean(decodeMountinfoPath(fields[4])),
+			fsType:     decodeMountinfoPath(fields[separator+1]),
+			source:     decodeMountinfoPath(fields[separator+2]),
+		}
+		if !pathUsesMount(testDir, entry.mountPoint) {
+			continue
+		}
+		if !found || len(entry.mountPoint) > len(selected.mountPoint) {
+			selected = entry
+			found = true
+			continue
+		}
+		if len(entry.mountPoint) == len(selected.mountPoint) && !sameMountCandidate(entry, selected) {
+			return mountInfoEntry{}, fmt.Errorf("无法识别测试目录所在块设备: 最深挂载点存在不一致候选")
+		}
+	}
+
+	if !found {
+		return mountInfoEntry{}, fmt.Errorf("无法识别测试目录所在块设备: 未找到 %s 的挂载点", testDir)
+	}
+	return selected, nil
+}
+
+func sameMountCandidate(a, b mountInfoEntry) bool {
+	return a.root == b.root && a.mountPoint == b.mountPoint && a.fsType == b.fsType && a.source == b.source
+}
+
+func pathUsesMount(path, mountPoint string) bool {
+	if mountPoint == "/" {
+		return strings.HasPrefix(path, "/")
+	}
+	return path == mountPoint || strings.HasPrefix(path, mountPoint+"/")
+}
+
+func decodeMountinfoPath(value string) string {
+	var decoded strings.Builder
+	decoded.Grow(len(value))
+
+	for i := 0; i < len(value); i++ {
+		if value[i] != '\\' || i+3 >= len(value) {
+			decoded.WriteByte(value[i])
+			continue
+		}
+		first, second, third := value[i+1], value[i+2], value[i+3]
+		if first < '0' || first > '7' || second < '0' || second > '7' || third < '0' || third > '7' {
+			decoded.WriteByte(value[i])
+			continue
+		}
+		decoded.WriteByte((first-'0')*64 + (second-'0')*8 + (third - '0'))
+		i += 3
+	}
+	return decoded.String()
+}
+
+func diskDeviceName(mount mountInfoEntry, diskStatsData []byte) (string, error) {
+	if mount.root != "/" {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: 挂载根目录 %q 不是 /", mount.root)
+	}
+	if mount.fsType == "btrfs" {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: 文件系统 %q 不能证明单设备", mount.fsType)
+	}
+	if strings.HasPrefix(mount.source, "/dev/mapper/") {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: 不支持 device-mapper 来源 %q", mount.source)
+	}
+	if !strings.HasPrefix(mount.source, "/dev/") {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: 挂载来源 %q 不是直接块设备", mount.source)
+	}
+
+	deviceName := strings.TrimPrefix(mount.source, "/dev/")
+	if deviceName == "" || strings.Contains(deviceName, "/") {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: 挂载来源 %q 无效", mount.source)
+	}
+	if strings.HasPrefix(deviceName, "dm-") {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: 不支持 device-mapper 设备 %q", deviceName)
+	}
+	if !diskStatsHasDevice(diskStatsData, deviceName) {
+		return "", fmt.Errorf("无法识别测试目录所在块设备: %q 未出现在 %s", deviceName, procDiskstatsPath)
+	}
+	return deviceName, nil
+}
+
+func diskStatsHasDevice(data []byte, deviceName string) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[2] == deviceName {
+			return true
+		}
+	}
+	return false
+}
+
+func parseDiskStatsForDevice(deviceName string, data []byte) (*DiskStats, error) {
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[2] != deviceName {
+			continue
+		}
 		if len(fields) < 14 {
-			continue
+			return nil, fmt.Errorf("解析 %s 失败: 字段不足", deviceName)
 		}
 
-		deviceName := fields[2]
-		if shouldSkipDiskDevice(deviceName) {
-			continue
-		}
-
-		// 解析字段
 		// fields[3]: 读完成次数
 		// fields[5]: 读扇区数 (每扇区 512 字节)
 		// fields[7]: 写完成次数
@@ -257,15 +390,18 @@ func (d *DiskCollector) CollectDiskStats() (*DiskStats, error) {
 			return nil, fmt.Errorf("解析 %s 加权 IO 耗时失败: %w", deviceName, err)
 		}
 
-		stats.ReadOps += readOps
-		stats.WriteOps += writeOps
-		stats.ReadBytes += readSectors * 512
-		stats.WriteBytes += writeSectors * 512
-		stats.IOTimeMs += ioTime
-		stats.WeightedIOMs += weightedIO
+		return &DiskStats{
+			DeviceName:   deviceName,
+			ReadOps:      readOps,
+			WriteOps:     writeOps,
+			ReadBytes:    readSectors * 512,
+			WriteBytes:   writeSectors * 512,
+			IOTimeMs:     ioTime,
+			WeightedIOMs: weightedIO,
+		}, nil
 	}
 
-	return stats, nil
+	return nil, fmt.Errorf("解析 %s 失败: 未找到设备", deviceName)
 }
 
 func shouldSkipDiskDevice(name string) bool {

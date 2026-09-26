@@ -3,6 +3,12 @@ package storage
 type Extra map[string]interface{}
 
 const (
+	// ExtraSamplingMode 标识采样频率。缺失该字段的历史样本按 regular 处理。
+	ExtraSamplingMode   = "sampling_mode"
+	ExtraBurstBatchID   = "burst_batch_id"
+	SamplingModeRegular = "regular"
+	SamplingModeBurst   = "burst"
+
 	ExtraWriteLatencyMS = "write_latency_ms"
 	ExtraSyncLatencyMS  = "sync_latency_ms"
 	ExtraReadLatencyMS  = "read_latency_ms"
@@ -20,6 +26,7 @@ const (
 	ExtraWriteBytes   = "write_bytes"
 	ExtraIOTimeMS     = "io_time_ms"
 	ExtraWeightedIOMS = "weighted_io_ms"
+	ExtraDeviceName   = "device_name"
 
 	ExtraLoad1  = "load1"
 	ExtraLoad5  = "load5"
@@ -46,6 +53,25 @@ const (
 	ExtraHasFull    = "has_full"
 )
 
+// WithSamplingMode 为指标附加采样模式，不修改传入的 Extra。
+func WithSamplingMode(extra Extra, mode string) Extra {
+	result := make(Extra, len(extra)+1)
+	for key, value := range extra {
+		result[key] = value
+	}
+	result[ExtraSamplingMode] = mode
+	return result
+}
+
+// WithSamplingModeAndBatchID 为密集采样指标附加模式和批次标识。
+func WithSamplingModeAndBatchID(extra Extra, mode, batchID string) Extra {
+	result := WithSamplingMode(extra, mode)
+	if batchID != "" {
+		result[ExtraBurstBatchID] = batchID
+	}
+	return result
+}
+
 func NewIOLatencyExtra(writeLatencyMS, syncLatencyMS float64) Extra {
 	return Extra{
 		ExtraWriteLatencyMS: writeLatencyMS,
@@ -71,8 +97,9 @@ func NewMemoryExtra(totalKB, availableKB uint64, availablePercent, swapUsage flo
 	}
 }
 
-func NewDiskStatsExtra(readOps, writeOps, readBytes, writeBytes, ioTimeMS, weightedIOMS uint64) Extra {
+func NewDiskStatsExtra(deviceName string, readOps, writeOps, readBytes, writeBytes, ioTimeMS, weightedIOMS uint64) Extra {
 	return Extra{
+		ExtraDeviceName:   deviceName,
 		ExtraReadOps:      readOps,
 		ExtraWriteOps:     writeOps,
 		ExtraReadBytes:    readBytes,

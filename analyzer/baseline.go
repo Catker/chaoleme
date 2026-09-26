@@ -58,6 +58,10 @@ func (a *Analyzer) calculateBaselineTrend(stats *PeriodStats, period string, cur
 		stats.BaselineReason = "历史指标查询失败"
 		return
 	}
+	// 密集采样只用于事件现场，不允许污染常规历史趋势。
+	baselineSteal = filterRegularMetrics(baselineSteal)
+	baselineIO = filterRegularMetrics(baselineIO)
+	baselineLoad = filterRegularMetrics(baselineLoad)
 
 	daysWithData := a.countDaysWithData(baselineSteal, baselineIO)
 	if daysWithData > cfg.days {

@@ -156,6 +156,7 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 	}
 
 	prompt := fmt.Sprintf(`你是一个 VPS 性能分析专家。请根据以下 %s 监控数据，基于证据等级评估 VPS 是否存在超售或资源争抢，并给出简洁建议。不要把缺失数据解释为正常。
+不得宣称已经确认服务商超售；事件说明仅反映客户机可见的资源争抢特征。
 
 ## 规则判定
 - 超售判定: %s
@@ -207,6 +208,12 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 		stats.TotalScore,
 		wordLimit,
 	)
+	if len(stats.ContentionEvents) > 0 {
+		prompt += "\n\n## 异常事件同步说明\n"
+		for _, event := range stats.ContentionEvents {
+			prompt += fmt.Sprintf("- %s: 同步样本 %d，说明 %s\n", event.Type, event.SynchronizedSamples, event.Correlation)
+		}
+	}
 
 	// 周报/月报增加趋势分析提示
 	if reportType == "weekly" {

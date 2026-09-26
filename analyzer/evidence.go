@@ -92,7 +92,7 @@ func findMissingMetrics(stats *PeriodStats) []string {
 	} else if stats.RandomIODirectIOSamples == 0 {
 		missing = append(missing, "random_io_direct")
 	}
-	if stats.DiskStatsSamples < 2 {
+	if stats.DiskStatsSamples < 2 || !stats.DiskBusyAvailable {
 		missing = append(missing, "disk_stats")
 	}
 	if stats.MemorySamples == 0 {
@@ -125,7 +125,7 @@ func (a *Analyzer) calculateOversellVerdict(stats *PeriodStats) {
 	strongIOPressure := stats.IOPressureSamples > 0 && (stats.IOPressureSomeAvg >= 10 || stats.IOPressureSomeP95 >= 20)
 	strongRandomIO := stats.RandomIODirectIOSamples > 0 && stats.RandomIOP95 >= 150
 	strongIOLatency := stats.IOLatencySamples > 0 && stats.IOLatencyP95 >= 100
-	strongDiskBusy := stats.DiskStatsSamples > 1 && stats.DiskBusyP95 >= 85
+	strongDiskBusy := stats.DiskBusyAvailable && stats.DiskBusyP95 >= 85
 	strongIO := strongIOWait || strongIOPressure || strongIOLatency || strongRandomIO || strongDiskBusy
 	ioOnlyStrong := !strongIOWait && !mediumSteal && (strongIOLatency || strongRandomIO || strongDiskBusy)
 	baselineDown := stats.BaselineQuality == BaselineUsable && stats.BaselineStatus == "degrading" && stats.BaselineDeviation >= 15

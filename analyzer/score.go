@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/Catker/chaoleme/collector"
@@ -88,8 +89,14 @@ type PeriodStats struct {
 	RandomIODirectIOSamples int
 
 	// 磁盘繁忙度统计
-	DiskBusyPercent float64 // IO 时间占比（平均）
-	DiskBusyP95     float64 // IO 时间占比（P95）
+	DiskBusyPercent       float64 // IO 时间占比（平均）
+	DiskBusyP95           float64 // IO 时间占比（P95）
+	DiskBusyAvailable     bool
+	DiskStatsDeviceName   string
+	DiskStatsDeviceStatus string
+
+	// 资源争抢事件只展示原始采样，不影响 Verdict。
+	ContentionEvents []ContentionEvent
 
 	// 内存统计
 	MemoryAvailablePercent float64
@@ -166,17 +173,18 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 查询各类指标。查询失败会降低证据等级，避免误判为优秀。
-	cpuStealMetrics := a.queryMetrics(stats, storage.MetricTypeCPUSteal, start, end)
-	cpuBenchMetrics := a.queryMetrics(stats, storage.MetricTypeCPUBench, start, end)
-	ioLatencyMetrics := a.queryMetrics(stats, storage.MetricTypeIOLatency, start, end)
-	memoryMetrics := a.queryMetrics(stats, storage.MetricTypeMemory, start, end)
+	cpuStealAllMetrics := a.queryMetrics(stats, storage.MetricTypeCPUSteal, start, end)
+	cpuStealMetrics := filterRegularMetrics(cpuStealAllMetrics)
+	cpuBenchMetrics := a.queryRegularMetrics(stats, storage.MetricTypeCPUBench, start, end)
+	ioLatencyMetrics := a.queryRegularMetrics(stats, storage.MetricTypeIOLatency, start, end)
+	memoryMetrics := a.queryRegularMetrics(stats, storage.MetricTypeMemory, start, end)
 	stats.CPUStealSamples = len(cpuStealMetrics)
 	stats.CPUBenchSamples = len(cpuBenchMetrics)
 	stats.IOLatencySamples = len(ioLatencyMetrics)
 	stats.MemorySamples = len(memoryMetrics)
 
-	// 读取运行环境上下文。使用最新值，避免静态环境指标因时间窗口漏掉。
-	if hostContext := a.getLatestMetric(stats, storage.MetricTypeHostContext); hostContext != nil {
+	// 读取常规采样的运行环境上下文。burst 上下文只用于事件同步说明。
+	if hostContext := a.getLatestRegularMetric(stats, storage.MetricTypeHostContext, end); hostContext != nil {
 		if isHostContextFresh(hostContext.Timestamp, end) {
 			stats.HostContextSamples = 1
 			stats.HypervisorDetected, _ = extraBool(hostContext, storage.ExtraHypervisorDetected)
@@ -199,7 +207,8 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算 CPU IOWait 统计
-	cpuIoWaitMetrics := a.queryMetrics(stats, storage.MetricTypeCPUIoWait, start, end)
+	cpuIoWaitAllMetrics := a.queryMetrics(stats, storage.MetricTypeCPUIoWait, start, end)
+	cpuIoWaitMetrics := filterRegularMetrics(cpuIoWaitAllMetrics)
 	stats.CPUIoWaitSamples = len(cpuIoWaitMetrics)
 	if len(cpuIoWaitMetrics) > 0 {
 		values := extractValues(cpuIoWaitMetrics)
@@ -209,7 +218,6 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		// 记录峰值发生时间
 		_, stats.CPUIoWaitMaxTime = findMaxWithTime(cpuIoWaitMetrics)
 	}
-
 	stats.CoreSampleSpanHours, stats.CoreCoveragePercent = calculateCoreSampleCoverage(cpuStealMetrics, cpuIoWaitMetrics, start, end)
 
 	// 计算时段分布（用于周报/月报分析）
@@ -252,7 +260,8 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算 CPU Load 统计
-	cpuLoadMetrics := a.queryMetrics(stats, storage.MetricTypeCPULoad, start, end)
+	cpuLoadAllMetrics := a.queryMetrics(stats, storage.MetricTypeCPULoad, start, end)
+	cpuLoadMetrics := filterRegularMetrics(cpuLoadAllMetrics)
 	stats.CPULoadSamples = len(cpuLoadMetrics)
 	if len(cpuLoadMetrics) > 0 {
 		values := extractValues(cpuLoadMetrics)
@@ -261,7 +270,8 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算 Linux PSI 压力统计
-	cpuPressureMetrics := a.queryMetrics(stats, storage.MetricTypeCPUPressure, start, end)
+	cpuPressureAllMetrics := a.queryMetrics(stats, storage.MetricTypeCPUPressure, start, end)
+	cpuPressureMetrics := filterRegularMetrics(cpuPressureAllMetrics)
 	stats.CPUPressureSamples = len(cpuPressureMetrics)
 	if len(cpuPressureMetrics) > 0 {
 		values := extractValues(cpuPressureMetrics)
@@ -269,7 +279,8 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		stats.CPUPressureSomeP95 = percentile(values, 95)
 	}
 
-	cpuThrottleMetrics := a.queryMetrics(stats, storage.MetricTypeCPUThrottle, start, end)
+	cpuThrottleAllMetrics := a.queryMetrics(stats, storage.MetricTypeCPUThrottle, start, end)
+	cpuThrottleMetrics := filterRegularMetrics(cpuThrottleAllMetrics)
 	stats.CPUThrottleSamples = len(cpuThrottleMetrics)
 	if len(cpuThrottleMetrics) > 0 {
 		values := calculateCPUThrottlePercents(cpuThrottleMetrics)
@@ -277,7 +288,8 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 		stats.CPUThrottleP95 = percentile(values, 95)
 	}
 
-	ioPressureMetrics := a.queryMetrics(stats, storage.MetricTypeIOPressure, start, end)
+	ioPressureAllMetrics := a.queryMetrics(stats, storage.MetricTypeIOPressure, start, end)
+	ioPressureMetrics := filterRegularMetrics(ioPressureAllMetrics)
 	stats.IOPressureSamples = len(ioPressureMetrics)
 	if len(ioPressureMetrics) > 0 {
 		values := extractValues(ioPressureMetrics)
@@ -286,7 +298,7 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算随机 IO 统计
-	randomIOMetrics := a.queryMetrics(stats, storage.MetricTypeRandomIO, start, end)
+	randomIOMetrics := a.queryRegularMetrics(stats, storage.MetricTypeRandomIO, start, end)
 	stats.RandomIOSamples = len(randomIOMetrics)
 	if len(randomIOMetrics) > 0 {
 		var writeLatencies, readLatencies, directWriteLatencies []float64
@@ -328,15 +340,37 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	}
 
 	// 计算磁盘繁忙度（从 disk_stats 采集的增量数据）
-	diskStatsMetrics := a.queryMetrics(stats, storage.MetricTypeDiskStats, start, end)
+	diskStatsMetrics := a.queryRegularMetrics(stats, storage.MetricTypeDiskStats, start, end)
 	stats.DiskStatsSamples = len(diskStatsMetrics)
-	if len(diskStatsMetrics) >= 2 {
+	stats.DiskStatsDeviceName, stats.DiskStatsDeviceStatus = diskStatsDevice(diskStatsMetrics)
+	if len(diskStatsMetrics) >= 2 && stats.DiskStatsDeviceStatus == "single" {
 		busyPercents := calculateDiskBusyPercents(diskStatsMetrics)
 		if len(busyPercents) > 0 {
 			stats.DiskBusyPercent = avg(busyPercents)
 			stats.DiskBusyP95 = percentile(busyPercents, 95)
+			stats.DiskBusyAvailable = true
 		}
 	}
+
+	// 异常事件保留所有采样，用于展示 burst 的现场证据；不影响常规统计和 Verdict。
+	hostContextAllMetrics := a.queryMetrics(stats, storage.MetricTypeHostContext, start, end)
+	stats.ContentionEvents = append(stats.ContentionEvents,
+		detectContentionEvents(string(storage.MetricTypeCPUSteal), contentionStealThreshold, cpuStealAllMetrics)...)
+	stats.ContentionEvents = append(stats.ContentionEvents,
+		detectContentionEvents(string(storage.MetricTypeCPUIoWait), contentionIOWaitThreshold, cpuIoWaitAllMetrics)...)
+	stats.ContentionEvents = correlateContentionEvents(
+		stats.ContentionEvents,
+		cpuStealAllMetrics,
+		cpuIoWaitAllMetrics,
+		cpuLoadAllMetrics,
+		cpuPressureAllMetrics,
+		ioPressureAllMetrics,
+		cpuThrottleAllMetrics,
+		hostContextAllMetrics,
+	)
+	sort.Slice(stats.ContentionEvents, func(i, j int) bool {
+		return stats.ContentionEvents[i].StartTime.Before(stats.ContentionEvents[j].StartTime)
+	})
 
 	// 计算历史趋势。它只作为辅助趋势证据，不直接替代绝对阈值。
 	a.calculateBaselineTrend(stats, period, cpuStealMetrics, ioLatencyMetrics, cpuLoadMetrics)
@@ -360,13 +394,22 @@ func (a *Analyzer) queryMetrics(stats *PeriodStats, metricType storage.MetricTyp
 	return metrics
 }
 
-func (a *Analyzer) getLatestMetric(stats *PeriodStats, metricType storage.MetricType) *storage.Metric {
-	metric, err := a.store.GetLatestMetric(metricType)
-	if err != nil {
-		stats.QueryErrors = append(stats.QueryErrors, fmt.Sprintf("%s latest: %v", metricType, err))
+func (a *Analyzer) queryRegularMetrics(stats *PeriodStats, metricType storage.MetricType, start, end time.Time) []*storage.Metric {
+	return filterRegularMetrics(a.queryMetrics(stats, metricType, start, end))
+}
+
+func (a *Analyzer) getLatestRegularMetric(stats *PeriodStats, metricType storage.MetricType, reference time.Time) *storage.Metric {
+	metrics := a.queryRegularMetrics(stats, metricType, reference.Add(-maxHostContextAge), reference.Add(maxHostContextAge))
+	if len(metrics) == 0 {
 		return nil
 	}
-	return metric
+	latest := metrics[0]
+	for _, metric := range metrics[1:] {
+		if metric.Timestamp.After(latest.Timestamp) {
+			latest = metric
+		}
+	}
+	return latest
 }
 
 func isHostContextFresh(metricTime, referenceTime time.Time) bool {

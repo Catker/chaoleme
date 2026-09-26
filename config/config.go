@@ -56,6 +56,8 @@ type CollectConfig struct {
 	CPUBenchInterval string `yaml:"cpu_bench_interval"`
 	IOTestInterval   string `yaml:"io_test_interval"`
 	IOTestSizeMB     int    `yaml:"io_test_size_mb"`
+	BurstInterval    string `yaml:"burst_interval"`
+	BurstDuration    string `yaml:"burst_duration"`
 }
 
 // AIConfig AI 分析配置
@@ -93,6 +95,8 @@ func DefaultConfig() *Config {
 			CPUBenchInterval: "30m",
 			IOTestInterval:   "15m",
 			IOTestSizeMB:     4,
+			BurstInterval:    "30s",
+			BurstDuration:    "10m",
 		},
 		AI: AIConfig{
 			Enabled: false,
@@ -167,16 +171,32 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	// 验证时间间隔格式
-	intervals := map[string]string{
-		"cpu_steal_interval": c.Collect.CPUStealInterval,
-		"cpu_bench_interval": c.Collect.CPUBenchInterval,
-		"io_test_interval":   c.Collect.IOTestInterval,
+	intervals := []struct {
+		name  string
+		value string
+	}{
+		{name: "cpu_steal_interval", value: c.Collect.CPUStealInterval},
+		{name: "cpu_bench_interval", value: c.Collect.CPUBenchInterval},
+		{name: "io_test_interval", value: c.Collect.IOTestInterval},
+		{name: "burst_interval", value: c.Collect.BurstInterval},
+		{name: "burst_duration", value: c.Collect.BurstDuration},
 	}
-	for name, interval := range intervals {
-		if _, err := time.ParseDuration(interval); err != nil {
-			return fmt.Errorf("%s 格式无效: %s", name, interval)
+	for _, interval := range intervals {
+		duration, err := time.ParseDuration(interval.value)
+		if err != nil {
+			return fmt.Errorf("%s 格式无效: %s", interval.name, interval.value)
 		}
+		if duration <= 0 {
+			return fmt.Errorf("%s 必须大于 0", interval.name)
+		}
+	}
+	if c.Collect.IOTestSizeMB <= 0 {
+		return fmt.Errorf("io_test_size_mb 必须大于 0")
+	}
+	burstInterval, _ := time.ParseDuration(c.Collect.BurstInterval)
+	burstDuration, _ := time.ParseDuration(c.Collect.BurstDuration)
+	if burstInterval >= burstDuration {
+		return fmt.Errorf("burst_interval 必须小于 burst_duration")
 	}
 
 	// 验证日报时间格式
@@ -244,5 +264,17 @@ func (c *Config) GetCPUBenchInterval() time.Duration {
 // GetIOTestInterval 获取 I/O 测试间隔
 func (c *Config) GetIOTestInterval() time.Duration {
 	d, _ := time.ParseDuration(c.Collect.IOTestInterval)
+	return d
+}
+
+// GetBurstInterval 获取异常期间的密集采样间隔。
+func (c *Config) GetBurstInterval() time.Duration {
+	d, _ := time.ParseDuration(c.Collect.BurstInterval)
+	return d
+}
+
+// GetBurstDuration 获取异常密集采样的持续时间。
+func (c *Config) GetBurstDuration() time.Duration {
+	d, _ := time.ParseDuration(c.Collect.BurstDuration)
 	return d
 }

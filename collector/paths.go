@@ -1,16 +1,17 @@
 package collector
 
 var (
-	procStatPath       = "/proc/stat"
-	procMeminfoPath    = "/proc/meminfo"
-	procLoadavgPath    = "/proc/loadavg"
-	procMountsPath     = "/proc/mounts"
-	procDiskstatsPath  = "/proc/diskstats"
-	procPressureCPU    = "/proc/pressure/cpu"
-	procPressureIO     = "/proc/pressure/io"
-	procCPUInfoPath    = "/proc/cpuinfo"
-	procInitCgroupPath = "/proc/1/cgroup"
-	procSelfCgroupPath = "/proc/self/cgroup"
+	procStatPath          = "/proc/stat"
+	procMeminfoPath       = "/proc/meminfo"
+	procLoadavgPath       = "/proc/loadavg"
+	procMountsPath        = "/proc/mounts"
+	procSelfMountinfoPath = "/proc/self/mountinfo"
+	procDiskstatsPath     = "/proc/diskstats"
+	procPressureCPU       = "/proc/pressure/cpu"
+	procPressureIO        = "/proc/pressure/io"
+	procCPUInfoPath       = "/proc/cpuinfo"
+	procInitCgroupPath    = "/proc/1/cgroup"
+	procSelfCgroupPath    = "/proc/self/cgroup"
 
 	sysBlockPath      = "/sys/block"
 	sysDMIProductPath = "/sys/class/dmi/id/product_name"

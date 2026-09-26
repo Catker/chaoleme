@@ -47,6 +47,18 @@ func TestDefaultRetentionSupportsMonthlyTrend(t *testing.T) {
 	}
 }
 
+func TestDefaultBurstSamplingConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	if cfg.Collect.BurstInterval != "30s" || cfg.Collect.BurstDuration != "10m" {
+		t.Fatalf("密集采样默认值不符合预期: %+v", cfg.Collect)
+	}
+	if cfg.GetBurstInterval().Seconds() != 30 || cfg.GetBurstDuration().Minutes() != 10 {
+		t.Fatalf("密集采样时长解析不符合预期: interval=%s duration=%s", cfg.GetBurstInterval(), cfg.GetBurstDuration())
+	}
+}
+
 func TestValidateRejectsRetentionTooShortForMonthlyTrend(t *testing.T) {
 	t.Parallel()
 
@@ -74,6 +86,88 @@ func TestValidateRetentionMatchesEnabledReports(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("周报开启时保留 %d 天应通过: %v", minWeeklyRetentionDays, err)
+	}
+}
+
+func TestValidateRejectsInvalidCollectValuesInFixedOrder(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		wantError string
+	}{
+		{
+			name: "cpu steal interval zero",
+			configure: func(cfg *Config) {
+				cfg.Collect.CPUStealInterval = "0s"
+			},
+			wantError: "cpu_steal_interval 必须大于 0",
+		},
+		{
+			name: "cpu bench interval negative",
+			configure: func(cfg *Config) {
+				cfg.Collect.CPUBenchInterval = "-1m"
+			},
+			wantError: "cpu_bench_interval 必须大于 0",
+		},
+		{
+			name: "io test interval zero",
+			configure: func(cfg *Config) {
+				cfg.Collect.IOTestInterval = "0s"
+			},
+			wantError: "io_test_interval 必须大于 0",
+		},
+		{
+			name: "burst interval zero",
+			configure: func(cfg *Config) {
+				cfg.Collect.BurstInterval = "0s"
+			},
+			wantError: "burst_interval 必须大于 0",
+		},
+		{
+			name: "burst duration negative",
+			configure: func(cfg *Config) {
+				cfg.Collect.BurstDuration = "-1m"
+			},
+			wantError: "burst_duration 必须大于 0",
+		},
+		{
+			name: "burst interval equal to duration",
+			configure: func(cfg *Config) {
+				cfg.Collect.BurstInterval = "10m"
+				cfg.Collect.BurstDuration = "10m"
+			},
+			wantError: "burst_interval 必须小于 burst_duration",
+		},
+		{
+			name: "io test size zero",
+			configure: func(cfg *Config) {
+				cfg.Collect.IOTestSizeMB = 0
+			},
+			wantError: "io_test_size_mb 必须大于 0",
+		},
+		{
+			name: "first invalid interval wins",
+			configure: func(cfg *Config) {
+				cfg.Collect.CPUStealInterval = "0s"
+				cfg.Collect.CPUBenchInterval = "0s"
+			},
+			wantError: "cpu_steal_interval 必须大于 0",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validTestConfig()
+			tt.configure(cfg)
+
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("错误不符合预期: got=%v want contains %q", err, tt.wantError)
+			}
+		})
 	}
 }
 

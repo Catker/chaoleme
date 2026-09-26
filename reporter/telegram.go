@@ -134,10 +134,32 @@ func (r *TelegramReporter) FormatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	// 磁盘繁忙度
 	diskBusyRisk := stats.RiskDetails["disk_busy"]
 	buf.WriteString(fmt.Sprintf("📀 磁盘繁忙度: %s\n", diskBusyRisk))
-	if stats.DiskBusyP95 > 0 {
+	if stats.DiskStatsDeviceStatus == "single" {
+		buf.WriteString(fmt.Sprintf("   • 设备: %s\n", stats.DiskStatsDeviceName))
+	} else if stats.DiskStatsSamples > 0 {
+		buf.WriteString("   • 设备: 无法确认单个设备\n")
+	}
+	if stats.DiskBusyAvailable {
 		buf.WriteString(fmt.Sprintf("   • P95: %.1f%%\n", stats.DiskBusyP95))
 	}
 	buf.WriteString("\n")
+
+	if len(stats.ContentionEvents) > 0 {
+		buf.WriteString("🕒 异常事件:\n")
+		for _, event := range stats.ContentionEvents {
+			buf.WriteString(fmt.Sprintf("   • %s: %s 至 %s，%d 个样本，峰值 %.1f%%，同步 %d\n",
+				event.Type,
+				event.StartTime.Format("01-02 15:04"),
+				event.EndTime.Format("01-02 15:04"),
+				event.SampleCount,
+				event.PeakPercent,
+				event.SynchronizedSamples))
+			if event.Correlation != "" {
+				buf.WriteString(fmt.Sprintf("     说明: %s\n", event.Correlation))
+			}
+		}
+		buf.WriteString("\n")
+	}
 
 	// Memory
 	memRisk := stats.RiskDetails["memory"]

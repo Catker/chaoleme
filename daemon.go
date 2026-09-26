@@ -19,7 +19,9 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	cpuStealInterval := cfg.GetCPUStealInterval()
 	cpuBenchInterval := cfg.GetCPUBenchInterval()
 	ioTestInterval := cfg.GetIOTestInterval()
-	log.Printf("采集间隔配置: CPU Steal=%v, CPU Bench=%v, I/O Test=%v", cpuStealInterval, cpuBenchInterval, ioTestInterval)
+	burstInterval := cfg.GetBurstInterval()
+	burstDuration := cfg.GetBurstDuration()
+	log.Printf("采集间隔配置: CPU Steal=%v, CPU Bench=%v, I/O Test=%v, Burst=%v/%v", cpuStealInterval, cpuBenchInterval, ioTestInterval, burstInterval, burstDuration)
 
 	// 创建定时器
 	cpuStealTicker := time.NewTicker(cpuStealInterval)
@@ -27,6 +29,14 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	ioTestTicker := time.NewTicker(ioTestInterval)
 	cleanupTicker := time.NewTicker(24 * time.Hour)
 	reportCheckTicker := time.NewTicker(1 * time.Minute) // 报告检查定时器
+	burstState := newBurstScheduler(burstDuration)
+	burstExpiryTimer := time.NewTimer(time.Hour)
+	if !burstExpiryTimer.Stop() {
+		<-burstExpiryTimer.C
+	}
+	var burstExpiryC <-chan time.Time
+	var burstTicker *time.Ticker
+	var burstTickerC <-chan time.Time
 
 	// 解析日报时间
 	dailyTime, err := time.Parse("15:04", cfg.Report.DailyTime)
@@ -38,8 +48,15 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// 启动时先采集一次
-	collectAll(cpu, disk, mem, store)
+	// 启动时先采集一次。首次异常也会进入密集采样。
+	initialObservation, initialCollectedCPU := collectAll(cpu, disk, mem, store)
+	if initialCollectedCPU && burstState.Observe(time.Now(), initialObservation) {
+		burstTicker = time.NewTicker(burstInterval)
+		burstTickerC = burstTicker.C
+		resetTimer(burstExpiryTimer, burstState.Remaining(time.Now()))
+		burstExpiryC = burstExpiryTimer.C
+		log.Printf("检测到 CPU 异常，启动密集采样，持续 %s", burstDuration)
+	}
 
 	// 上次发送报告的日期
 	var lastDailyReport, lastWeeklyReport, lastMonthlyReport time.Time
@@ -48,7 +65,40 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 		select {
 		case <-cpuStealTicker.C:
 			log.Println("[定时任务] 开始采集 CPU Steal/IOWait...")
-			collectCoreMetrics(cpu, store, time.Now())
+			now := time.Now()
+			observation, collectedCPU := collectCoreMetrics(cpu, store, now)
+			if collectedCPU && burstState.Observe(now, observation) {
+				if burstTicker == nil {
+					burstTicker = time.NewTicker(burstInterval)
+					burstTickerC = burstTicker.C
+					log.Printf("检测到 CPU 异常，启动密集采样，持续 %s", burstDuration)
+				} else {
+					log.Printf("CPU 异常持续，延长密集采样，持续至 %s", now.Add(burstState.Remaining(now)).Format(time.RFC3339))
+				}
+				resetTimer(burstExpiryTimer, burstState.Remaining(now))
+				burstExpiryC = burstExpiryTimer.C
+			}
+
+		case <-burstTickerC:
+			now := time.Now()
+			observation, collectedCPU := collectBurstMetrics(cpu, store, now)
+			if collectedCPU && burstState.Observe(now, observation) {
+				resetTimer(burstExpiryTimer, burstState.Remaining(now))
+				burstExpiryC = burstExpiryTimer.C
+				log.Printf("密集采样检测到持续异常，延长至 %s", now.Add(burstState.Remaining(now)).Format(time.RFC3339))
+			}
+
+		case <-burstExpiryC:
+			now := time.Now()
+			if burstState.Active(now) {
+				resetTimer(burstExpiryTimer, burstState.Remaining(now))
+				continue
+			}
+			burstTicker.Stop()
+			burstTicker = nil
+			burstTickerC = nil
+			burstExpiryC = nil
+			log.Println("CPU 异常密集采样已结束，恢复常规采样")
 
 		case <-cpuBenchTicker.C:
 			log.Println("[定时任务] 开始 CPU 基准测试...")
@@ -95,6 +145,10 @@ func runDaemon(cfg *config.Config, cpu *collector.CPUCollector, disk *collector.
 			ioTestTicker.Stop()
 			cleanupTicker.Stop()
 			reportCheckTicker.Stop()
+			burstExpiryTimer.Stop()
+			if burstTicker != nil {
+				burstTicker.Stop()
+			}
 			return
 		}
 	}

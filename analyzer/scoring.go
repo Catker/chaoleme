@@ -45,9 +45,9 @@ func (a *Analyzer) calculateScore(stats *PeriodStats) {
 	stats.RiskDetails["random_io"] = describeIfPresent(stats.RandomIOSamples > 0, a.describeRandomIORisk(stats.RandomIOP95, stats.RandomIOReadAvg, stats.StorageType))
 
 	// 6. 磁盘繁忙度评分 (5%)
-	diskBusyScore := scoreIfPresent(stats.DiskStatsSamples > 1, a.scoreDiskBusy(stats.DiskBusyPercent))
+	diskBusyScore := scoreIfPresent(stats.DiskBusyAvailable, a.scoreDiskBusy(stats.DiskBusyPercent))
 	totalScore += diskBusyScore * WeightDiskBusy
-	stats.RiskDetails["disk_busy"] = describeIfPresent(stats.DiskStatsSamples > 1, a.describeDiskBusyRisk(stats.DiskBusyPercent))
+	stats.RiskDetails["disk_busy"] = describeIfPresent(stats.DiskBusyAvailable, a.describeDiskBusyRisk(stats.DiskBusyPercent))
 
 	// 7. 内存评分 (10%)
 	memoryScore := scoreIfPresent(stats.MemorySamples > 0, a.scoreMemory(stats.MemoryAvailablePercent))

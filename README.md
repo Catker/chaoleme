@@ -84,6 +84,8 @@ collect:
   cpu_bench_interval: "30m"  # CPU 基准测试间隔
   io_test_interval: "15m"    # I/O 延迟测试间隔
   io_test_size_mb: 4         # I/O 测试文件大小
+  burst_interval: "30s"     # 异常期间的密集采样间隔
+  burst_duration: "10m"     # 单次异常密集采样持续时间
 
 # AI 分析（可选，修改后会在下一次生成报告时自动加载最新配置）
 ai:

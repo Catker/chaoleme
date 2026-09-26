@@ -26,132 +26,140 @@ func reportRange(reportType string, now time.Time) (time.Time, time.Time, error)
 }
 
 type reportJSONOutput struct {
-	Period              string                         `json:"period"`
-	StartTime           time.Time                      `json:"start_time"`
-	EndTime             time.Time                      `json:"end_time"`
-	OversellVerdict     analyzer.OversellVerdict       `json:"oversell_verdict"`
-	EvidenceLevel       analyzer.EvidenceLevel         `json:"evidence_level"`
-	EvidenceSummary     []string                       `json:"evidence_summary"`
-	MissingMetrics      []string                       `json:"missing_metrics"`
-	QueryErrors         []string                       `json:"query_errors"`
-	CoreSampleSpanHours float64                        `json:"core_sample_span_hours"`
-	CoreCoveragePercent float64                        `json:"core_coverage_percent"`
-	CPUStealSamples     int                            `json:"cpu_steal_samples"`
-	CPUIoWaitSamples    int                            `json:"cpu_iowait_samples"`
-	CPUBenchSamples     int                            `json:"cpu_bench_samples"`
-	IOLatencySamples    int                            `json:"io_latency_samples"`
-	RandomIOSamples     int                            `json:"random_io_samples"`
-	DiskStatsSamples    int                            `json:"disk_stats_samples"`
-	MemorySamples       int                            `json:"memory_samples"`
-	CPULoadSamples      int                            `json:"cpu_load_samples"`
-	CPUPressureSamples  int                            `json:"cpu_pressure_samples"`
-	IOPressureSamples   int                            `json:"io_pressure_samples"`
-	CPUThrottleSamples  int                            `json:"cpu_throttle_samples"`
-	HostContextSamples  int                            `json:"host_context_samples"`
-	CPUStealAvg         float64                        `json:"cpu_steal_avg"`
-	CPUStealMax         float64                        `json:"cpu_steal_max"`
-	CPUStealP95         float64                        `json:"cpu_steal_p95"`
-	CPUIoWaitAvg        float64                        `json:"cpu_iowait_avg"`
-	CPUIoWaitMax        float64                        `json:"cpu_iowait_max"`
-	CPUIoWaitP95        float64                        `json:"cpu_iowait_p95"`
-	CPUBenchAvg         float64                        `json:"cpu_bench_avg"`
-	CPUBenchCV          float64                        `json:"cpu_bench_cv"`
-	IOLatencyAvg        float64                        `json:"io_latency_avg"`
-	IOLatencyP95        float64                        `json:"io_latency_p95"`
-	IOLatencyP99        float64                        `json:"io_latency_p99"`
-	RandomIOWriteAvg    float64                        `json:"random_io_write_avg"`
-	RandomIOReadAvg     float64                        `json:"random_io_read_avg"`
-	RandomIOP95         float64                        `json:"random_io_p95"`
-	RandomIODirectIO    int                            `json:"random_io_direct_samples"`
-	CPULoadAvg          float64                        `json:"cpu_load_avg"`
-	CPULoadMax          float64                        `json:"cpu_load_max"`
-	CPUPressureSomeAvg  float64                        `json:"cpu_pressure_some_avg"`
-	CPUPressureSomeP95  float64                        `json:"cpu_pressure_some_p95"`
-	IOPressureSomeAvg   float64                        `json:"io_pressure_some_avg"`
-	IOPressureSomeP95   float64                        `json:"io_pressure_some_p95"`
-	CPUThrottleAvg      float64                        `json:"cpu_throttle_avg"`
-	CPUThrottleP95      float64                        `json:"cpu_throttle_p95"`
-	DiskBusyAvg         float64                        `json:"disk_busy_avg"`
-	DiskBusyP95         float64                        `json:"disk_busy_p95"`
-	MemoryAvailablePct  float64                        `json:"memory_available_percent"`
-	BaselineDeviation   float64                        `json:"baseline_deviation"`
-	BaselineStatus      string                         `json:"baseline_status"`
-	BaselineMinDays     int                            `json:"baseline_min_days"`
-	BaselineQuality     analyzer.BaselineQuality       `json:"baseline_quality"`
-	BaselineReason      string                         `json:"baseline_reason"`
-	BaselineMetrics     []analyzer.BaselineMetricTrend `json:"baseline_metrics"`
-	StorageType         collector.StorageType          `json:"storage_type"`
-	TotalScore          float64                        `json:"health_score"`
-	RiskLevel           analyzer.RiskLevel             `json:"health_level"`
-	VirtualizationType  string                         `json:"virtualization_type"`
-	HypervisorDetected  bool                           `json:"hypervisor_detected"`
-	ContainerDetected   bool                           `json:"container_detected"`
-	StealDirect         bool                           `json:"steal_directly_interpretable"`
+	Period                string                         `json:"period"`
+	StartTime             time.Time                      `json:"start_time"`
+	EndTime               time.Time                      `json:"end_time"`
+	OversellVerdict       analyzer.OversellVerdict       `json:"oversell_verdict"`
+	EvidenceLevel         analyzer.EvidenceLevel         `json:"evidence_level"`
+	EvidenceSummary       []string                       `json:"evidence_summary"`
+	MissingMetrics        []string                       `json:"missing_metrics"`
+	QueryErrors           []string                       `json:"query_errors"`
+	CoreSampleSpanHours   float64                        `json:"core_sample_span_hours"`
+	CoreCoveragePercent   float64                        `json:"core_coverage_percent"`
+	CPUStealSamples       int                            `json:"cpu_steal_samples"`
+	CPUIoWaitSamples      int                            `json:"cpu_iowait_samples"`
+	CPUBenchSamples       int                            `json:"cpu_bench_samples"`
+	IOLatencySamples      int                            `json:"io_latency_samples"`
+	RandomIOSamples       int                            `json:"random_io_samples"`
+	DiskStatsSamples      int                            `json:"disk_stats_samples"`
+	MemorySamples         int                            `json:"memory_samples"`
+	CPULoadSamples        int                            `json:"cpu_load_samples"`
+	CPUPressureSamples    int                            `json:"cpu_pressure_samples"`
+	IOPressureSamples     int                            `json:"io_pressure_samples"`
+	CPUThrottleSamples    int                            `json:"cpu_throttle_samples"`
+	HostContextSamples    int                            `json:"host_context_samples"`
+	CPUStealAvg           float64                        `json:"cpu_steal_avg"`
+	CPUStealMax           float64                        `json:"cpu_steal_max"`
+	CPUStealP95           float64                        `json:"cpu_steal_p95"`
+	CPUIoWaitAvg          float64                        `json:"cpu_iowait_avg"`
+	CPUIoWaitMax          float64                        `json:"cpu_iowait_max"`
+	CPUIoWaitP95          float64                        `json:"cpu_iowait_p95"`
+	CPUBenchAvg           float64                        `json:"cpu_bench_avg"`
+	CPUBenchCV            float64                        `json:"cpu_bench_cv"`
+	IOLatencyAvg          float64                        `json:"io_latency_avg"`
+	IOLatencyP95          float64                        `json:"io_latency_p95"`
+	IOLatencyP99          float64                        `json:"io_latency_p99"`
+	RandomIOWriteAvg      float64                        `json:"random_io_write_avg"`
+	RandomIOReadAvg       float64                        `json:"random_io_read_avg"`
+	RandomIOP95           float64                        `json:"random_io_p95"`
+	RandomIODirectIO      int                            `json:"random_io_direct_samples"`
+	CPULoadAvg            float64                        `json:"cpu_load_avg"`
+	CPULoadMax            float64                        `json:"cpu_load_max"`
+	CPUPressureSomeAvg    float64                        `json:"cpu_pressure_some_avg"`
+	CPUPressureSomeP95    float64                        `json:"cpu_pressure_some_p95"`
+	IOPressureSomeAvg     float64                        `json:"io_pressure_some_avg"`
+	IOPressureSomeP95     float64                        `json:"io_pressure_some_p95"`
+	CPUThrottleAvg        float64                        `json:"cpu_throttle_avg"`
+	CPUThrottleP95        float64                        `json:"cpu_throttle_p95"`
+	DiskBusyAvg           float64                        `json:"disk_busy_avg"`
+	DiskBusyP95           float64                        `json:"disk_busy_p95"`
+	DiskBusyAvailable     bool                           `json:"disk_busy_available"`
+	DiskStatsDeviceName   string                         `json:"disk_stats_device_name"`
+	DiskStatsDeviceStatus string                         `json:"disk_stats_device_status"`
+	ContentionEvents      []analyzer.ContentionEvent     `json:"contention_events"`
+	MemoryAvailablePct    float64                        `json:"memory_available_percent"`
+	BaselineDeviation     float64                        `json:"baseline_deviation"`
+	BaselineStatus        string                         `json:"baseline_status"`
+	BaselineMinDays       int                            `json:"baseline_min_days"`
+	BaselineQuality       analyzer.BaselineQuality       `json:"baseline_quality"`
+	BaselineReason        string                         `json:"baseline_reason"`
+	BaselineMetrics       []analyzer.BaselineMetricTrend `json:"baseline_metrics"`
+	StorageType           collector.StorageType          `json:"storage_type"`
+	TotalScore            float64                        `json:"health_score"`
+	RiskLevel             analyzer.RiskLevel             `json:"health_level"`
+	VirtualizationType    string                         `json:"virtualization_type"`
+	HypervisorDetected    bool                           `json:"hypervisor_detected"`
+	ContainerDetected     bool                           `json:"container_detected"`
+	StealDirect           bool                           `json:"steal_directly_interpretable"`
 }
 
 func buildReportJSON(stats *analyzer.PeriodStats) ([]byte, error) {
 	return json.MarshalIndent(reportJSONOutput{
-		Period:              stats.Period,
-		StartTime:           stats.StartTime,
-		EndTime:             stats.EndTime,
-		OversellVerdict:     stats.OversellVerdict,
-		EvidenceLevel:       stats.EvidenceLevel,
-		EvidenceSummary:     stats.EvidenceSummary,
-		MissingMetrics:      stats.MissingMetrics,
-		QueryErrors:         stats.QueryErrors,
-		CoreSampleSpanHours: stats.CoreSampleSpanHours,
-		CoreCoveragePercent: stats.CoreCoveragePercent,
-		CPUStealSamples:     stats.CPUStealSamples,
-		CPUIoWaitSamples:    stats.CPUIoWaitSamples,
-		CPUBenchSamples:     stats.CPUBenchSamples,
-		IOLatencySamples:    stats.IOLatencySamples,
-		RandomIOSamples:     stats.RandomIOSamples,
-		DiskStatsSamples:    stats.DiskStatsSamples,
-		MemorySamples:       stats.MemorySamples,
-		CPULoadSamples:      stats.CPULoadSamples,
-		CPUPressureSamples:  stats.CPUPressureSamples,
-		IOPressureSamples:   stats.IOPressureSamples,
-		CPUThrottleSamples:  stats.CPUThrottleSamples,
-		HostContextSamples:  stats.HostContextSamples,
-		CPUStealAvg:         stats.CPUStealAvg,
-		CPUStealMax:         stats.CPUStealMax,
-		CPUStealP95:         stats.CPUStealP95,
-		CPUIoWaitAvg:        stats.CPUIoWaitAvg,
-		CPUIoWaitMax:        stats.CPUIoWaitMax,
-		CPUIoWaitP95:        stats.CPUIoWaitP95,
-		CPUBenchAvg:         stats.CPUBenchAvg,
-		CPUBenchCV:          stats.CPUBenchCV,
-		IOLatencyAvg:        stats.IOLatencyAvg,
-		IOLatencyP95:        stats.IOLatencyP95,
-		IOLatencyP99:        stats.IOLatencyP99,
-		RandomIOWriteAvg:    stats.RandomIOWriteAvg,
-		RandomIOReadAvg:     stats.RandomIOReadAvg,
-		RandomIOP95:         stats.RandomIOP95,
-		RandomIODirectIO:    stats.RandomIODirectIOSamples,
-		CPULoadAvg:          stats.CPULoadAvg,
-		CPULoadMax:          stats.CPULoadMax,
-		CPUPressureSomeAvg:  stats.CPUPressureSomeAvg,
-		CPUPressureSomeP95:  stats.CPUPressureSomeP95,
-		IOPressureSomeAvg:   stats.IOPressureSomeAvg,
-		IOPressureSomeP95:   stats.IOPressureSomeP95,
-		CPUThrottleAvg:      stats.CPUThrottleAvg,
-		CPUThrottleP95:      stats.CPUThrottleP95,
-		DiskBusyAvg:         stats.DiskBusyPercent,
-		DiskBusyP95:         stats.DiskBusyP95,
-		MemoryAvailablePct:  stats.MemoryAvailablePercent,
-		BaselineDeviation:   stats.BaselineDeviation,
-		BaselineStatus:      stats.BaselineStatus,
-		BaselineMinDays:     stats.BaselineMinDays,
-		BaselineQuality:     stats.BaselineQuality,
-		BaselineReason:      stats.BaselineReason,
-		BaselineMetrics:     stats.BaselineMetrics,
-		StorageType:         stats.StorageType,
-		TotalScore:          stats.TotalScore,
-		RiskLevel:           stats.RiskLevel,
-		VirtualizationType:  stats.VirtualizationType,
-		HypervisorDetected:  stats.HypervisorDetected,
-		ContainerDetected:   stats.ContainerDetected,
-		StealDirect:         stats.StealDirectlyInterpretable,
+		Period:                stats.Period,
+		StartTime:             stats.StartTime,
+		EndTime:               stats.EndTime,
+		OversellVerdict:       stats.OversellVerdict,
+		EvidenceLevel:         stats.EvidenceLevel,
+		EvidenceSummary:       stats.EvidenceSummary,
+		MissingMetrics:        stats.MissingMetrics,
+		QueryErrors:           stats.QueryErrors,
+		CoreSampleSpanHours:   stats.CoreSampleSpanHours,
+		CoreCoveragePercent:   stats.CoreCoveragePercent,
+		CPUStealSamples:       stats.CPUStealSamples,
+		CPUIoWaitSamples:      stats.CPUIoWaitSamples,
+		CPUBenchSamples:       stats.CPUBenchSamples,
+		IOLatencySamples:      stats.IOLatencySamples,
+		RandomIOSamples:       stats.RandomIOSamples,
+		DiskStatsSamples:      stats.DiskStatsSamples,
+		MemorySamples:         stats.MemorySamples,
+		CPULoadSamples:        stats.CPULoadSamples,
+		CPUPressureSamples:    stats.CPUPressureSamples,
+		IOPressureSamples:     stats.IOPressureSamples,
+		CPUThrottleSamples:    stats.CPUThrottleSamples,
+		HostContextSamples:    stats.HostContextSamples,
+		CPUStealAvg:           stats.CPUStealAvg,
+		CPUStealMax:           stats.CPUStealMax,
+		CPUStealP95:           stats.CPUStealP95,
+		CPUIoWaitAvg:          stats.CPUIoWaitAvg,
+		CPUIoWaitMax:          stats.CPUIoWaitMax,
+		CPUIoWaitP95:          stats.CPUIoWaitP95,
+		CPUBenchAvg:           stats.CPUBenchAvg,
+		CPUBenchCV:            stats.CPUBenchCV,
+		IOLatencyAvg:          stats.IOLatencyAvg,
+		IOLatencyP95:          stats.IOLatencyP95,
+		IOLatencyP99:          stats.IOLatencyP99,
+		RandomIOWriteAvg:      stats.RandomIOWriteAvg,
+		RandomIOReadAvg:       stats.RandomIOReadAvg,
+		RandomIOP95:           stats.RandomIOP95,
+		RandomIODirectIO:      stats.RandomIODirectIOSamples,
+		CPULoadAvg:            stats.CPULoadAvg,
+		CPULoadMax:            stats.CPULoadMax,
+		CPUPressureSomeAvg:    stats.CPUPressureSomeAvg,
+		CPUPressureSomeP95:    stats.CPUPressureSomeP95,
+		IOPressureSomeAvg:     stats.IOPressureSomeAvg,
+		IOPressureSomeP95:     stats.IOPressureSomeP95,
+		CPUThrottleAvg:        stats.CPUThrottleAvg,
+		CPUThrottleP95:        stats.CPUThrottleP95,
+		DiskBusyAvg:           stats.DiskBusyPercent,
+		DiskBusyP95:           stats.DiskBusyP95,
+		DiskBusyAvailable:     stats.DiskBusyAvailable,
+		DiskStatsDeviceName:   stats.DiskStatsDeviceName,
+		DiskStatsDeviceStatus: stats.DiskStatsDeviceStatus,
+		ContentionEvents:      stats.ContentionEvents,
+		MemoryAvailablePct:    stats.MemoryAvailablePercent,
+		BaselineDeviation:     stats.BaselineDeviation,
+		BaselineStatus:        stats.BaselineStatus,
+		BaselineMinDays:       stats.BaselineMinDays,
+		BaselineQuality:       stats.BaselineQuality,
+		BaselineReason:        stats.BaselineReason,
+		BaselineMetrics:       stats.BaselineMetrics,
+		StorageType:           stats.StorageType,
+		TotalScore:            stats.TotalScore,
+		RiskLevel:             stats.RiskLevel,
+		VirtualizationType:    stats.VirtualizationType,
+		HypervisorDetected:    stats.HypervisorDetected,
+		ContainerDetected:     stats.ContainerDetected,
+		StealDirect:           stats.StealDirectlyInterpretable,
 	}, "", "  ")
 }
 

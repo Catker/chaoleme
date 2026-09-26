@@ -56,21 +56,33 @@ func TestBuildReportJSONIncludesEvidenceFields(t *testing.T) {
 	t.Parallel()
 
 	payload, err := buildReportJSON(&analyzer.PeriodStats{
-		Period:                     "daily",
-		OversellVerdict:            analyzer.OversellLikely,
-		EvidenceLevel:              analyzer.EvidenceHigh,
-		EvidenceSummary:            []string{"CPU Steal 已达到强证据阈值"},
-		CoreCoveragePercent:        80,
-		CPUStealSamples:            288,
-		CPUIoWaitSamples:           288,
-		RandomIOSamples:            96,
-		RandomIODirectIOSamples:    96,
-		CPUPressureSamples:         288,
-		CPUThrottleSamples:         288,
-		CPUStealP95:                16,
-		RandomIOP95:                3.2,
-		CPUPressureSomeP95:         12,
-		CPUThrottleP95:             0,
+		Period:                  "daily",
+		OversellVerdict:         analyzer.OversellLikely,
+		EvidenceLevel:           analyzer.EvidenceHigh,
+		EvidenceSummary:         []string{"CPU Steal 已达到强证据阈值"},
+		CoreCoveragePercent:     80,
+		CPUStealSamples:         288,
+		CPUIoWaitSamples:        288,
+		RandomIOSamples:         96,
+		RandomIODirectIOSamples: 96,
+		CPUPressureSamples:      288,
+		CPUThrottleSamples:      288,
+		CPUStealP95:             16,
+		RandomIOP95:             3.2,
+		CPUPressureSomeP95:      12,
+		CPUThrottleP95:          0,
+		DiskBusyAvailable:       true,
+		DiskStatsDeviceName:     "vda1",
+		DiskStatsDeviceStatus:   "single",
+		ContentionEvents: []analyzer.ContentionEvent{{
+			Type:                "cpu_steal",
+			StartTime:           time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+			EndTime:             time.Date(2026, 7, 7, 10, 5, 0, 0, time.UTC),
+			SampleCount:         2,
+			PeakPercent:         12,
+			SynchronizedSamples: 2,
+			Correlation:         "符合宿主机 CPU 争抢特征",
+		}},
 		StorageType:                collector.StorageTypeSSD,
 		TotalScore:                 72,
 		RiskLevel:                  analyzer.RiskLevelGood,
@@ -117,6 +129,17 @@ func TestBuildReportJSONIncludesEvidenceFields(t *testing.T) {
 	}
 	if decoded["storage_type"] != string(collector.StorageTypeSSD) {
 		t.Fatalf("存储类型不符合预期: %v", decoded["storage_type"])
+	}
+	if decoded["disk_stats_device_name"] != "vda1" || decoded["disk_stats_device_status"] != "single" {
+		t.Fatalf("磁盘设备信息不符合预期: %+v", decoded)
+	}
+	events, ok := decoded["contention_events"].([]interface{})
+	if !ok || len(events) != 1 {
+		t.Fatalf("资源争抢事件不符合预期: %+v", decoded["contention_events"])
+	}
+	event, ok := events[0].(map[string]interface{})
+	if !ok || event["synchronized_samples"] != float64(2) || event["correlation"] != "符合宿主机 CPU 争抢特征" {
+		t.Fatalf("资源争抢事件关联字段不符合预期: %+v", events[0])
 	}
 }
 

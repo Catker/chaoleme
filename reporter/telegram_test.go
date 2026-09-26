@@ -45,6 +45,35 @@ func TestFormatReportShowsVerdictAndHealthSeparately(t *testing.T) {
 	}
 }
 
+func TestFormatReportShowsContentionEventsAndDiskDevice(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	message := NewTelegramReporter(&config.TelegramConfig{}, "test-host").FormatReport(&analyzer.PeriodStats{
+		Period:                "daily",
+		EndTime:               start.Add(2 * time.Hour),
+		RiskDetails:           map[string]string{"disk_busy": "✅ 低"},
+		DiskStatsSamples:      2,
+		DiskStatsDeviceName:   "vda1",
+		DiskStatsDeviceStatus: "single",
+		DiskBusyAvailable:     true,
+		DiskBusyP95:           12.5,
+		ContentionEvents: []analyzer.ContentionEvent{{
+			Type:        "cpu_steal",
+			StartTime:   start,
+			EndTime:     start.Add(5 * time.Minute),
+			SampleCount: 2,
+			PeakPercent: 12,
+		}},
+	}, "")
+
+	for _, want := range []string{"设备: vda1", "🕒 异常事件", "cpu_steal", "2 个样本", "峰值 12.0%"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("报告缺少 %q，内容:\n%s", want, message)
+		}
+	}
+}
+
 func TestSplitTelegramMessageRespectsSafeLimit(t *testing.T) {
 	t.Parallel()
 
