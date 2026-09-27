@@ -7,7 +7,7 @@
 ## ✨ 特性
 
 - 🔍 **多维度检测**
-  - CPU Steal Time - 虚拟化资源争抢的核心指标
+  - CPU Steal Time - 虚拟化资源争抢的核心指标，同时看全周期统计和高峰时段
   - I/O Wait - 检测存储 I/O 瓶颈
   - 4KB 随机读写延迟 - 使用 O_DIRECT 绕过缓存，测量真实磁盘性能
   - 磁盘繁忙度 - 从 `/proc/diskstats` 采集系统级 I/O 统计
@@ -16,17 +16,18 @@
   - 运行环境上下文 - 识别虚拟化类型、容器环境和 Steal 可解释性
   - 内存可用率
 - 📊 **证据判定**：区分强证据、辅助证据和缺失数据，避免把本机压力误判为超售
+- ⚡ **异常密集采样**：发现 Steal/IOWait 异常时自动切换到 30 秒一次的密集采样，记录争抢现场
 - 📈 **历史趋势**：用稳健统计和质量评级识别性能退化
 - 🤖 **AI 分析**：可选接入 OpenAI 兼容 API 生成智能评价
 - 📱 **Telegram 通知**：支持日报/周报/月报，多主机标识
-- 💾 **低资源消耗**：内存 < 10MB，CPU < 0.1%
-- 🚀 **单二进制部署**：无依赖，下载即用
+- 💾 **低资源消耗**：内存 < 10MB，CPU < 0.1%，磁盘占用约 64MB（随机 I/O 测试文件）加数据库
+- 🚀 **单二进制部署**：静态编译，无依赖，下载即用
 
 ## 📦 快速安装
 
 ### 下载预编译版本
 
-从 [Releases](https://github.com/Catker/chaoleme/releases) 下载对应架构的二进制文件：
+从 [Releases](https://github.com/Catker/chaoleme/releases) 下载对应架构的安装包（提供 amd64 / arm64 / arm / 386）：
 
 ```bash
 # amd64
@@ -40,15 +41,20 @@ tar -xzf chaoleme-linux-arm64.tar.gz
 
 ```bash
 chmod +x install.sh
-sudo ./install.sh
+sudo ./install.sh                      # 安装到 /opt/chaoleme
+sudo ./install.sh install /data/chaoleme  # 或安装到自定义目录
 ```
 
+安装脚本会创建专用的 `chaoleme` 用户和 systemd 服务，配置文件权限设为 600（包含 bot token 与 API key）。
+
 ### 从源码编译
+
+需要 Go 1.25.5 或更高版本：
 
 ```bash
 git clone https://github.com/Catker/chaoleme.git
 cd chaoleme
-go build -ldflags="-s -w" -o chaoleme .
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o chaoleme .
 ```
 
 ## ⚙️ 配置
@@ -67,16 +73,16 @@ telegram:
 # 报告配置
 report:
   daily: true
-  daily_time: "09:00"
+  daily_time: "09:00"  # 日报/周报/月报共用的发送时间
   weekly: true
-  weekly_day: 0     # 0=周日
+  weekly_day: 0     # 0=周日 … 6=周六
   monthly: true
-  monthly_day: 1
+  monthly_day: 1    # 1-28，避免短月份跳过
 
 # 存储配置
 storage:
   db_path: "/opt/chaoleme/data/data.db"
-  retention_days: 90  # 月报历史趋势至少需要 90 天
+  retention_days: 90  # 至少 15 天（仅日报）/ 35 天（含周报）/ 90 天（含月报）
 
 # 采集配置
 collect:
@@ -104,6 +110,10 @@ ai:
 ## 🚀 使用
 
 ```bash
+# 查看版本 / 仅校验配置文件
+chaoleme --version
+chaoleme --validate
+
 # 测试 Telegram 连接
 chaoleme --test-telegram
 
@@ -144,14 +154,25 @@ chaoleme --collect-for 24h --collect-interval 5m --collect-io-interval 15m
 CPU Bench、I/O 测试、内存和磁盘统计按 `--collect-io-interval` 低频采集，减少采样本身对 I/O 的影响。
 启动时会输出预计样本数，便于确认样本规模是否足够。
 
+除 `--version`、`--diagnose` 外，其余命令都需要读取配置文件（默认 `/opt/chaoleme/config/config.yaml`，可用 `--config` 指定）。
+
+### 异常密集采样
+
+守护进程模式下，常规 CPU 采样发现 Steal ≥ 8% 或 IOWait ≥ 30% 时，会切换为每 `burst_interval`（默认 30 秒）采样一次，
+持续 `burst_duration`（默认 10 分钟），异常持续则自动延长。
+
+- 密集样本单独标记，不影响全周期均值、P95、历史趋势等常规统计
+- 密集样本会按实际覆盖时长计入"高峰时段 Steal"统计，并用于报告中的异常事件与同步关联说明
+- `--collect-for` / `--collect-once` 不触发密集采样
+
 ### 自动更新
 
 ```bash
-# 更新到最新版本
+# 更新到最新版本（同时会把配置文件权限修正为 600）
 sudo ./update.sh
 
 # 更新到指定版本
-sudo ./update.sh v1.3.0
+sudo ./update.sh v1.4.0
 
 # 强制重新安装当前版本
 sudo ./update.sh --force
@@ -177,13 +198,16 @@ sudo ./uninstall.sh
 | 顺序 I/O 延迟 | 15% | SSD < 20ms / HDD < 50ms (P95) |
 | 随机 I/O 延迟 | 10% | SSD < 30ms / HDD < 100ms (P95) |
 | 磁盘繁忙度 | 5% | < 30% |
-| 内存可用率 | 10% | > 90% |
+| 内存可用率 | 10% | ≥ 50% |
 | 历史趋势 | 5% | 可参考且偏离 < 10% |
 
 **历史趋势数据要求**：
-- 日报：当前 1 天 + 前 14 天历史窗口，至少保留 15 天
-- 周报：当前 7 天 + 前 28 天历史窗口，至少保留 35 天
-- 月报：当前约 30 天 + 前 60 天历史窗口，至少保留 90 天
+
+| 报告 | 历史窗口 | 开始计算 | 可作为趋势证据 | 最少保留 |
+|-----|---------|---------|--------------|---------|
+| 日报 | 前 14 天 | 3 天 | 7 天 | 15 天 |
+| 周报 | 前 28 天 | 7 天 | 14 天 | 35 天 |
+| 月报 | 前 60 天 | 14 天 | 30 天 | 90 天 |
 
 **历史趋势质量**：
 - `usable`：可参考，可作为辅助趋势证据
@@ -200,7 +224,7 @@ sudo ./uninstall.sh
 **超售判定**：
 - 🔴 高度可能超售：CPU Steal 达到强证据阈值（全周期均值/P95，或高峰时段），且运行环境支持直接解释 Steal
 - ⚠️ 可能存在超售或资源争抢：存在 Steal、I/O 或可参考的历史趋势异常，但证据链不完整
-- 📊 更像本机负载导致：Load 较高且 Steal 正常
+- 📊 更像本机负载导致：Load 较高或 cgroup CPU 限额节流明显，且 Steal 正常
 - ✅ 暂无明显超售证据：核心指标未达到阈值
 - ⚪ 数据不足：核心样本不足，不能判定
 
@@ -213,49 +237,77 @@ sudo ./uninstall.sh
 - 日报：至少 12 个 CPU Steal/IOWait 样本
 - 周报：至少 36 个 CPU Steal/IOWait 样本
 - 月报：至少 72 个 CPU Steal/IOWait 样本
-- 核心样本时间覆盖率至少 50%，避免短时间密集采样误代表整个周期
+- 核心样本时间覆盖率：日报 ≥ 50%，周报 ≥ 60%，月报 ≥ 70%，避免短时间密集采样误代表整个周期
 
 ## 📋 报告示例
 
+以下为阿里云香港一台 2 核 KVM 实例连续采样约 19 小时后的真实日报（仅替换了主机名）：
+
 ```
-📊 超了么日报 [Tokyo-VPS-01]
-📅 2025-12-25
+📊 超了么日报 | 🖥️ Tokyo-VPS-01
+📅 2026-09-27
 
 ━━━━━━━━━━━━━━━━━━
-🧭 超售判定: ⚠️ 可能存在超售或资源争抢
-🔎 证据等级: 中
-
-🖥️ CPU 争抢证据: ⚠️ 中等
-   • Steal Time 平均: 3.2%
-   • Steal Time 峰值: 18.7%
-   • IOWait 平均: 2.1%
-   • 性能波动系数: 0.23
+🧭 超售判定: ✅ 暂无明显超售证据
+🔎 证据等级: 高
+   • 核心指标未达到超售证据阈值
 
 🧪 样本覆盖:
-   • CPU Steal/IOWait 样本: 288/288
-   • 核心覆盖: 23.9小时 / 99.6%
+   • CPU Steal/IOWait 样本: 231/231
+   • 核心覆盖: 19.2小时 / 79.9%
 
 🧱 运行环境:
-   • 虚拟化类型: kvm
+   • 虚拟化类型: unknown-hypervisor
+   • Hypervisor: true
+   • 容器环境: false
    • Steal 可直接解释: true
 
-💾 存储争抢证据: ✅ 低
-   • 顺序写延迟 P95: 8.3ms
-   • 随机写延迟 P95: 3.2ms
-   • 随机读延迟 P95: 2.8ms
-   • 磁盘繁忙度: 12%
+🖥️ CPU 争抢证据: ✅ 低
+   • Steal Time 平均: 0.00%
+   • Steal Time 峰值: 0.00%
+   • 高争抢时长 (Steal≥10%): 0.0小时 / 0.0%
+   • 性能波动系数: 0.099
 
-📈 历史趋势: 正常
-   • 性能偏离: +5%
+⏳ CPU IOWait 风险: ✅ 低
+   • IOWait 平均: 0.02%
+   • IOWait 峰值: 0.09%
+   • 峰值时段: 15:00-16:00
+
+💾 顺序写延迟: ✅ 低
+   • P95: 4.59ms
+   • P99: 11.62ms
+   • 存储类型: SSD
+
+🎲 随机 I/O: ✅ 低 (写P95:0.5ms 读均值:0.6ms)
+   • 写延迟: 0.51ms
+   • 读延迟: 0.61ms
+   • O_DIRECT 有效样本: 77/77
+
+📀 磁盘繁忙度: ✅ 低 (0.0%)
+   • 设备: vda1
+   • P95: 0.1%
+
+🧠 内存状态: ✅ 正常
+   • 可用率: 36.3%
+
+📊 CPU 负载: 📊 0.01 (空闲) [参考值]
+   • Load1 (归一化): 0.01
+   • 峰值 (归一化): 0.07
+   • CPU PSI some: 平均 0.13% / P95 0.25%
+   • CPU 限额节流: 平均 0.00% / P95 0.00%
+   • IO PSI some: 平均 0.03% / P95 0.05%
+
+📈 历史趋势: 📊 历史趋势建立中 (1/3天)
+   • 偏离度: 1.0%
+   • 依据: 历史样本天数不足
 
 ━━━━━━━━━━━━━━━━━━
-📈 健康评分: 72/100
-📋 健康等级: 🟢 良好
-
-🤖 AI 分析:
-CPU Steal 有持续异常，存在资源争抢风险，建议继续观察高峰时段样本。
+📈 健康评分: 92/100
+📋 健康等级: ✅ 优秀
 ━━━━━━━━━━━━━━━━━━
 ```
+
+存在 Steal 时，CPU 部分还会显示峰值时段和"最差 1 小时"窗口；检测到连续的争抢样本时会追加异常事件列表；启用 AI 后末尾附带 AI 分析。
 
 ## 🔧 技术细节
 
