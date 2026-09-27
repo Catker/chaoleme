@@ -214,3 +214,19 @@ func writeStealSamples(t *testing.T, store *storage.Storage, start time.Time, co
 		saveMetric(t, store, ts, storage.MetricTypeCPULoad, 0.2, nil)
 	}
 }
+
+func TestAnalyzePeriodOmitsWorstHourWhenStealIsZero(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	start := time.Now().Add(-24 * time.Hour).Truncate(time.Minute)
+	writeStealDay(t, store, start, func(int) float64 { return 0 })
+
+	stats, err := NewAnalyzer(store).AnalyzePeriod("daily", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if !stats.CPUStealWorstHourStart.IsZero() || stats.StealWorstHourLabel() != "N/A" {
+		t.Fatalf("全程无 Steal 时不应给出最差时段: %s", stats.StealWorstHourLabel())
+	}
+}

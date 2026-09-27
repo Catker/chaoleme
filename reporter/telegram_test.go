@@ -78,6 +78,24 @@ func TestFormatReportShowsContentionEventsAndDiskDevice(t *testing.T) {
 	}
 }
 
+func TestFormatReportHidesPeakTimeWhenZero(t *testing.T) {
+	t.Parallel()
+
+	message := NewTelegramReporter(&config.TelegramConfig{}, "test-host").FormatReport(&analyzer.PeriodStats{
+		Period:           "daily",
+		EndTime:          time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC),
+		RiskDetails:      map[string]string{},
+		CPUStealMaxTime:  time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		CPUIoWaitMaxTime: time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
+	}, "")
+
+	for _, unwanted := range []string{"峰值时段", "最差 1 小时"} {
+		if strings.Contains(message, unwanted) {
+			t.Fatalf("峰值为 0 时不应显示 %q，内容:\n%s", unwanted, message)
+		}
+	}
+}
+
 func TestSplitTelegramMessageRespectsSafeLimit(t *testing.T) {
 	t.Parallel()
 

@@ -147,11 +147,11 @@ func (a *AIAnalyzer) buildPrompt(stats *PeriodStats, reportType string) string {
 
 	// 格式化峰值时间（只显示时分）
 	stealPeakTime := "N/A"
-	if !stats.CPUStealMaxTime.IsZero() {
+	if stats.CPUStealMax > 0 && !stats.CPUStealMaxTime.IsZero() {
 		stealPeakTime = stats.CPUStealMaxTime.Format("15:04")
 	}
 	iowaitPeakTime := "N/A"
-	if !stats.CPUIoWaitMaxTime.IsZero() {
+	if stats.CPUIoWaitMax > 0 && !stats.CPUIoWaitMaxTime.IsZero() {
 		iowaitPeakTime = stats.CPUIoWaitMaxTime.Format("15:04")
 	}
 

@@ -214,7 +214,8 @@ func (a *Analyzer) AnalyzePeriod(period string, start, end time.Time) (*PeriodSt
 	stealTimeline := analyzeStealTimeline(buildStealTimeline(cpuStealAllMetrics, cpuStealMetrics))
 	stats.CPUStealHighTimePercent = stealTimeline.HighTimePercent
 	stats.CPUStealHighTimeHours = stealTimeline.HighTimeHours
-	if !stealTimeline.WorstWindowEnd.IsZero() {
+	// 全程无 Steal 时最差窗口只是第一个窗口，不记录时段，报告显示 N/A。
+	if !stealTimeline.WorstWindowEnd.IsZero() && stealTimeline.WorstWindowAvg > 0 {
 		stats.CPUStealWorstHourAvg = stealTimeline.WorstWindowAvg
 		stats.CPUStealWorstHourStart = stealTimeline.WorstWindowEnd.Add(-stealWindow)
 	}

@@ -96,7 +96,8 @@ func (r *TelegramReporter) FormatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("🖥️ CPU 争抢证据: %s\n", cpuRisk))
 	buf.WriteString(fmt.Sprintf("   • Steal Time 平均: %.2f%%\n", stats.CPUStealAvg))
 	buf.WriteString(fmt.Sprintf("   • Steal Time 峰值: %.2f%%\n", stats.CPUStealMax))
-	if !stats.CPUStealMaxTime.IsZero() {
+	// 峰值为 0 时没有意义的时段，不显示
+	if stats.CPUStealMax > 0 && !stats.CPUStealMaxTime.IsZero() {
 		buf.WriteString(fmt.Sprintf("   • 峰值时段: %s\n", formatHourRange(stats.CPUStealMaxTime)))
 	}
 	if !stats.CPUStealWorstHourStart.IsZero() {
@@ -110,7 +111,7 @@ func (r *TelegramReporter) FormatReport(stats *analyzer.PeriodStats, aiAnalysis 
 	buf.WriteString(fmt.Sprintf("⏳ CPU IOWait 风险: %s\n", iowaitRisk))
 	buf.WriteString(fmt.Sprintf("   • IOWait 平均: %.2f%%\n", stats.CPUIoWaitAvg))
 	buf.WriteString(fmt.Sprintf("   • IOWait 峰值: %.2f%%\n", stats.CPUIoWaitMax))
-	if !stats.CPUIoWaitMaxTime.IsZero() {
+	if stats.CPUIoWaitMax > 0 && !stats.CPUIoWaitMaxTime.IsZero() {
 		buf.WriteString(fmt.Sprintf("   • 峰值时段: %s\n", formatHourRange(stats.CPUIoWaitMaxTime)))
 	}
 	buf.WriteString("\n")
