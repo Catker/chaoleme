@@ -31,7 +31,7 @@ var (
 	diagnose          = flag.Bool("diagnose", false, "诊断当前环境是否支持超售证据采集")
 )
 
-var Version = "1.3.0"
+var Version = "1.4.0"
 
 func main() {
 	flag.Parse()
